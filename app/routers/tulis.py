@@ -4,8 +4,9 @@ from datetime import datetime, timezone
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status
 from pymongo.errors import DuplicateKeyError
+from motor.motor_asyncio import AsyncIOMotorDatabase
 
-from app.auth import get_authenticated_mesin_id, verify_mesin_access
+from app.auth import verify_mesin_exists, verify_write_api_key
 from app.db import get_db
 from app.models import (
     BotolCreate,
@@ -15,7 +16,7 @@ from app.models import (
     WriteSingleResponse,
 )
 
-router = APIRouter(tags=["Tulis Data"])
+router = APIRouter(tags=["Tulis Data"], dependencies=[Depends(verify_write_api_key)])
 
 
 @router.post(
@@ -26,14 +27,14 @@ router = APIRouter(tags=["Tulis Data"])
 )
 async def simpan_telemetri(
     items: List[TelemetriCreate],
-    auth_mesin_id: str = Depends(get_authenticated_mesin_id),
+    db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     """Menerima 1–10 dokumen telemetri (batch).
-    
-    - Lebih dari 10 dokumen atau kosong -> 400 Bad Request.
-    - Setiap dokumen divalidasi mesin_id harus sama dengan pemilik API key.
+
+    - Batas batch: 1 sampai 10 dokumen per request. Lebih dari 10 atau kosong -> 400 Bad Request.
+    - Validasi mesin_id terdaftar di collection 'mesin' -> jika tidak -> 400.
     - Dedup id_kirim: dokumen yang id_kirim-nya sudah tercatat akan dilewati.
-    - Menambahkan timestamp server 'diterima' pada setiap dokumen.
+    - Menambahkan timestamp server 'diterima' (UTC) pada setiap dokumen.
     """
     if len(items) < 1 or len(items) > 10:
         raise HTTPException(
@@ -41,14 +42,14 @@ async def simpan_telemetri(
             detail="Jumlah dokumen telemetri harus antara 1 sampai 10 dokumen per permintaan",
         )
 
-    # Validasi kepemilikan mesin untuk setiap item
-    for item in items:
-        verify_mesin_access(auth_mesin_id, item.mesin_id)
+    # Validasi bahwa semua mesin_id terdaftar di database
+    unique_mesin_ids = {item.mesin_id for item in items}
+    for mid in unique_mesin_ids:
+        await verify_mesin_exists(mid, db=db)
 
-    db = get_db()
     server_now = datetime.now(timezone.utc)
 
-    # Siapkan dokumen dalam bentuk dictionary
+    # Siapkan dokumen
     docs_to_process = []
     id_kirim_list = []
     for item in items:
@@ -58,18 +59,18 @@ async def simpan_telemetri(
         if d.get("id_kirim"):
             id_kirim_list.append(d["id_kirim"])
 
-    # Dedup id_kirim untuk collection time series
+    # Dedup id_kirim di API karena time series collection tidak mendukung unique index
     existing_id_kirim = set()
     if id_kirim_list:
         cursor = db.telemetri.find(
-            {"mesin_id": auth_mesin_id, "id_kirim": {"$in": id_kirim_list}},
+            {"mesin_id": {"$in": list(unique_mesin_ids)}, "id_kirim": {"$in": id_kirim_list}},
             {"id_kirim": 1},
         )
         async for doc in cursor:
-            if "id_kirim" in doc:
+            if "id_kirim" in doc and doc["id_kirim"]:
                 existing_id_kirim.add(doc["id_kirim"])
 
-    # Filter hanya dokumen yang belum ada id_kirim-nya
+    # Filter dokumen yang belum ada id_kirim-nya
     docs_to_insert = [
         d for d in docs_to_process
         if not d.get("id_kirim") or d["id_kirim"] not in existing_id_kirim
@@ -95,17 +96,16 @@ async def simpan_telemetri(
 )
 async def simpan_event(
     event: EventCreate,
-    auth_mesin_id: str = Depends(get_authenticated_mesin_id),
+    db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     """Menerima dan menyimpan 1 dokumen kejadian (event).
-    
-    - Wajib membawa header X-Api-Key yang valid.
-    - mesin_id harus cocok dengan API key.
-    - Idempotent: jika id_kirim sudah ada (DuplicateKeyError), kembalikan 201 dengan pesan 'duplikat diabaikan'.
-    """
-    verify_mesin_access(auth_mesin_id, event.mesin_id)
 
-    db = get_db()
+    - Wajib membawa header X-Api-Key yang valid.
+    - mesin_id divalidasi ke collection 'mesin' -> jika tidak ada -> 400.
+    - Idempotent: jika id_kirim sudah ada (DuplicateKeyError), tangkap dan balas 201 'duplikat diabaikan'.
+    """
+    await verify_mesin_exists(event.mesin_id, db=db)
+
     server_now = datetime.now(timezone.utc)
     doc = event.model_dump()
     doc["diterima"] = server_now
@@ -120,7 +120,7 @@ async def simpan_event(
             id=str(result.inserted_id),
         )
     except DuplicateKeyError:
-        # Idempotent response
+        # Idempotent response saat id_kirim sudah ada
         return WriteSingleResponse(
             status="sukses",
             pesan="duplikat diabaikan",
@@ -138,17 +138,16 @@ async def simpan_event(
 )
 async def simpan_botol(
     botol: BotolCreate,
-    auth_mesin_id: str = Depends(get_authenticated_mesin_id),
+    db: AsyncIOMotorDatabase = Depends(get_db),
 ):
-    """Menerima dan menyimpan 1 dokumen botol saat botol masuk kotak.
-    
-    - Wajib membawa header X-Api-Key yang valid.
-    - mesin_id harus cocok dengan API key.
-    - Idempotent: jika id_kirim sudah ada (DuplicateKeyError), kembalikan 201 dengan pesan 'duplikat diabaikan'.
-    """
-    verify_mesin_access(auth_mesin_id, botol.mesin_id)
+    """Menerima dan menyimpan 1 dokumen botol saat botol masuk kotak penampung.
 
-    db = get_db()
+    - Wajib membawa header X-Api-Key yang valid.
+    - mesin_id divalidasi ke collection 'mesin' -> jika tidak ada -> 400.
+    - Idempotent: jika id_kirim sudah ada (DuplicateKeyError), tangkap dan balas 201 'duplikat diabaikan'.
+    """
+    await verify_mesin_exists(botol.mesin_id, db=db)
+
     server_now = datetime.now(timezone.utc)
     doc = botol.model_dump()
     doc["diterima"] = server_now
@@ -163,7 +162,7 @@ async def simpan_botol(
             id=str(result.inserted_id),
         )
     except DuplicateKeyError:
-        # Idempotent response
+        # Idempotent response saat id_kirim sudah ada
         return WriteSingleResponse(
             status="sukses",
             pesan="duplikat diabaikan",

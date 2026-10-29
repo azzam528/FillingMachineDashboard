@@ -6,10 +6,12 @@ from typing import Annotated, Any, Dict, List, Optional, Union
 import dateutil.parser
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 
+from app.config import get_settings
+
 
 def parse_iso8601_utc(v: Any) -> datetime:
     """Memvalidasi dan mengonversi timestamp ISO 8601 menjadi datetime tz-aware UTC.
-    
+
     Menolak timestamp naive tanpa informasi zona waktu.
     """
     if isinstance(v, datetime):
@@ -40,8 +42,23 @@ def parse_optional_iso8601_utc(v: Any) -> Optional[datetime]:
     return parse_iso8601_utc(v)
 
 
+def validate_and_normalize_pengguna(v: Any) -> str:
+    """Memvalidasi dan menormalisasi nama pengguna ke huruf kecil."""
+    if not isinstance(v, str) or not v.strip():
+        raise ValueError("Field 'pengguna' wajib diisi string tidak kosong")
+    normalized = v.strip().lower()
+    valid_set = get_settings().pengguna_valid_set
+    if normalized not in valid_set:
+        valid_list_str = ", ".join(get_settings().pengguna_valid_list)
+        raise ValueError(
+            f"Pengguna '{v}' tidak sah. Nilai yang diperbolehkan: {valid_list_str}"
+        )
+    return normalized
+
+
 UtcDatetime = Annotated[datetime, BeforeValidator(parse_iso8601_utc)]
 OptionalUtcDatetime = Annotated[Optional[datetime], BeforeValidator(parse_optional_iso8601_utc)]
+PenggunaStr = Annotated[str, BeforeValidator(validate_and_normalize_pengguna)]
 
 
 class ModeEnum(str, Enum):
@@ -94,6 +111,7 @@ class TelemetriCreate(BaseModel):
     waktu: UtcDatetime = Field(..., description="Timestamp ISO 8601 UTC dari pengirim")
     mesin_id: str = Field(..., min_length=1, description="ID mesin, mis. mesin-01")
     sesi_id: str = Field(..., min_length=1, description="ID sesi play/produksi")
+    pengguna: PenggunaStr = Field(..., description="Identitas pengguna (mis. gibral, haikal, alvin, naya)")
     id_kirim: Optional[str] = Field(None, description="ID unik pengiriman untuk idempotensi/dedup")
     mode: Optional[ModeEnum] = Field(None, description="Mode operasi mesin (Mati/Siap/Berjalan/Darurat)")
     darurat: bool = Field(..., description="Status tombol darurat / E-stop aktif")
@@ -114,6 +132,7 @@ class EventCreate(BaseModel):
     waktu: UtcDatetime = Field(..., description="Waktu kejadian ISO 8601 UTC")
     mesin_id: str = Field(..., min_length=1, description="ID mesin")
     sesi_id: str = Field(..., min_length=1, description="ID sesi")
+    pengguna: PenggunaStr = Field(..., description="Identitas pengguna")
     id_kirim: Optional[str] = Field(None, description="ID unik pengiriman untuk dedup")
     jenis: str = Field(..., min_length=1, description="Nama kejadian, mis. estop_tekan, START, dll.")
     mode_sebelum: Optional[ModeEnum] = Field(None, description="Mode mesin sebelum kejadian")
@@ -128,6 +147,7 @@ class EventCreate(BaseModel):
 class BotolCreate(BaseModel):
     mesin_id: str = Field(..., min_length=1, description="ID mesin")
     sesi_id: str = Field(..., min_length=1, description="ID sesi")
+    pengguna: PenggunaStr = Field(..., description="Identitas pengguna")
     id_kirim: Optional[str] = Field(None, description="ID unik pengiriman untuk dedup")
     nomor: int = Field(..., ge=1, description="Nomor urut botol")
     slot: int = Field(..., ge=0, description="Nomor slot turret tempat botol berada")
@@ -162,17 +182,27 @@ class WriteSingleResponse(BaseModel):
     id: Optional[str] = None
 
 
-class RingkasanResponse(BaseModel):
-    mesin_id: str
-    sesi_id: Optional[str] = None
-    rentang: Dict[str, Optional[str]]
+class RingkasanStatistik(BaseModel):
     jumlah_botol: int
     botol_gagal: int
     rata_rata_waktu_siklus_detik: float
     total_durasi_darurat_detik: float
 
 
+class RingkasanResponse(BaseModel):
+    mesin_id: str
+    sesi_id: Optional[str] = None
+    pengguna: Optional[str] = None
+    rentang: Dict[str, Optional[str]]
+    jumlah_botol: int
+    botol_gagal: int
+    rata_rata_waktu_siklus_detik: float
+    total_durasi_darurat_detik: float
+    rincian_pengguna: Optional[Dict[str, RingkasanStatistik]] = None
+
+
 class HealthResponse(BaseModel):
     status: str
     database: str
     waktu: str
+    detail: Optional[str] = None

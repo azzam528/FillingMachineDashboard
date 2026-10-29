@@ -11,7 +11,7 @@ from app.config import get_settings
 from app.db import close_db_connection, connect_to_db
 from app.routers import baca, health, tulis
 
-# Setup basic logging
+# Setup basic logging (tanpa mencatat isi body penuh atau API key)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -34,7 +34,7 @@ settings = get_settings()
 app = FastAPI(
     title="Liquid Filling Machine REST API",
     description=(
-        "REST API perantara antara digital twin Unity / ESP32 dan MongoDB Atlas "
+        "REST API perantara antara digital twin Unity dan MongoDB Atlas "
         "untuk sistem pencatatan data mesin pengisi botol rotary 10 slot."
     ),
     version="1.0.0",
@@ -48,7 +48,7 @@ def _format_loc(loc: tuple) -> str:
     parts = [str(x) for x in loc if x != "body"]
     if not parts:
         return "body"
-    
+
     formatted = ""
     for p in parts:
         if p.isdigit():
@@ -87,7 +87,13 @@ def _translate_message(msg: str) -> str:
         return f"Nilai harus lebih kecil atau sama dengan {limit}"
     if "Input should be a valid list" in msg:
         return "Body harus berupa array / list data"
-    
+    if "Input should be 'Mati', 'Siap', 'Berjalan' or 'Darurat'" in msg:
+        return "Nilai mode harus salah satu dari: Mati, Siap, Berjalan, Darurat"
+    if "Input should be 'OK', 'TIDAK_PENUH' or 'TANPA_TUTUP'" in msg:
+        return "Status botol harus salah satu dari: OK, TIDAK_PENUH, TANPA_TUTUP"
+    if "Input should be 'pemain', 'sistem', 'operator' or 'esp32'" in msg:
+        return "Sumber harus salah satu dari: pemain, sistem, operator, esp32"
+
     return msg
 
 

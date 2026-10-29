@@ -1,8 +1,8 @@
 """Konfigurasi aplikasi menggunakan pydantic-settings."""
 
 from functools import lru_cache
-from typing import Dict
-from pydantic import Field, field_validator
+from typing import List, Set
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -18,10 +18,10 @@ class Settings(BaseSettings):
         description="Nama database MongoDB",
     )
 
-    # API Key per mesin: format "mesin-01:kunci1,mesin-02:kunci2"
-    MESIN_API_KEYS: str = Field(
-        default="mesin-01:kunci1",
-        description="Daftar pasangan mesin_id:api_key dipisahkan koma",
+    # API Key tunggal untuk semua pengirim
+    API_KEY: str = Field(
+        default="rahasia-api-key",
+        description="Kunci API tunggal untuk autentikasi pengiriman data",
     )
 
     # Pengaturan endpoint baca
@@ -30,9 +30,15 @@ class Settings(BaseSettings):
         description="Jika True, endpoint GET memerlukan API key",
     )
 
-    # TODO: Nilai konstanta jenis event untuk E-stop ditekan dan dilepas.
-    # Dikonfirmasi oleh pengguna: 'estop_tekan' dan 'estop_lepas'.
-    # Dapat diubah via environment variable jika ada penyesuaian di masa depan.
+    # Daftar nama pengguna yang sah dipisahkan koma
+    PENGGUNA_VALID: str = Field(
+        default="gibral,haikal,alvin,naya",
+        description="Daftar nama pengguna yang sah dipisahkan tanda koma",
+    )
+
+    # Konstanta jenis event untuk E-stop ditekan dan dilepas
+    # TODO: Nilai jenis event dikonfirmasi menggunakan 'estop_tekan' dan 'estop_lepas'.
+    # Dapat dikonfigurasi melalui environment variable.
     EVENT_JENIS_ESTOP_TEKAN: str = Field(
         default="estop_tekan",
         description="Nama jenis event saat tombol E-stop ditekan",
@@ -54,24 +60,16 @@ class Settings(BaseSettings):
     )
 
     @property
-    def mesin_api_keys_map(self) -> Dict[str, str]:
-        """Mengembalikan mapping dari mesin_id ke API key.
-        
-        Contoh: {"mesin-01": "kunci1", "mesin-02": "kunci2"}
-        """
-        mapping: Dict[str, str] = {}
-        if not self.MESIN_API_KEYS:
-            return mapping
+    def pengguna_valid_list(self) -> List[str]:
+        """Mengembalikan daftar nama pengguna sah dalam huruf kecil."""
+        if not self.PENGGUNA_VALID:
+            return []
+        return [p.strip().lower() for p in self.PENGGUNA_VALID.split(",") if p.strip()]
 
-        pairs = self.MESIN_API_KEYS.split(",")
-        for pair in pairs:
-            pair = pair.strip()
-            if not pair:
-                continue
-            if ":" in pair:
-                mesin_id, key = pair.split(":", 1)
-                mapping[mesin_id.strip()] = key.strip()
-        return mapping
+    @property
+    def pengguna_valid_set(self) -> Set[str]:
+        """Mengembalikan set nama pengguna sah dalam huruf kecil."""
+        return set(self.pengguna_valid_list)
 
 
 @lru_cache
