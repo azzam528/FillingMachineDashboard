@@ -14,30 +14,24 @@ def parse_iso8601_utc(v: Any) -> datetime:
 
     Menolak timestamp naive tanpa informasi zona waktu.
     """
-    if isinstance(v, datetime):
-        if v.tzinfo is None or v.tzinfo.utcoffset(v) is None:
-            raise ValueError(
-                "Timestamp harus menyertakan zona waktu (UTC), contoh: '2026-10-29T10:00:00Z'"
-            )
-        return v.astimezone(timezone.utc)
     if isinstance(v, str):
-        v = v.strip()
         try:
-            dt = dateutil.parser.isoparse(v)
-            if dt.tzinfo is None or dt.tzinfo.utcoffset(dt) is None:
-                raise ValueError(
-                    "Timestamp harus menyertakan zona waktu (UTC), contoh: '2026-10-29T10:00:00Z'"
-                )
-            return dt.astimezone(timezone.utc)
+            v = dateutil.parser.isoparse(v.strip())
         except (ValueError, OverflowError) as e:
             raise ValueError(
-                f"Format timestamp ISO 8601 tidak valid: {str(e)}. Contoh yang benar: '2026-10-29T10:00:00Z'"
+                f"Format timestamp ISO 8601 tidak valid: {e}. Contoh yang benar: '2026-10-29T10:00:00Z'"
             )
-    raise ValueError("Timestamp harus berupa string ISO 8601 atau objek datetime tz-aware")
+    if not isinstance(v, datetime):
+        raise ValueError("Timestamp harus berupa string ISO 8601 atau objek datetime tz-aware")
+    if v.tzinfo is None or v.tzinfo.utcoffset(v) is None:
+        raise ValueError(
+            "Timestamp harus menyertakan zona waktu (UTC), contoh: '2026-10-29T10:00:00Z'"
+        )
+    return v.astimezone(timezone.utc)
 
 
 def parse_optional_iso8601_utc(v: Any) -> Optional[datetime]:
-    if v is None or v == "":
+    if not v:
         return None
     return parse_iso8601_utc(v)
 
@@ -47,9 +41,9 @@ def validate_and_normalize_pengguna(v: Any) -> str:
     if not isinstance(v, str) or not v.strip():
         raise ValueError("Field 'pengguna' wajib diisi string tidak kosong")
     normalized = v.strip().lower()
-    valid_set = get_settings().pengguna_valid_set
-    if normalized not in valid_set:
-        valid_list_str = ", ".join(get_settings().pengguna_valid_list)
+    settings = get_settings()
+    if normalized not in settings.pengguna_valid_set:
+        valid_list_str = ", ".join(settings.pengguna_valid_list)
         raise ValueError(
             f"Pengguna '{v}' tidak sah. Nilai yang diperbolehkan: {valid_list_str}"
         )

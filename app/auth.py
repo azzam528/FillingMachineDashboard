@@ -66,16 +66,5 @@ def verify_read_access(
     Jika bernilai False, endpoint dapat diakses secara terbuka.
     """
     if settings.REQUIRE_KEY_FOR_READ:
-        if not x_api_key:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Header X-Api-Key wajib disertakan",
-            )
-        if not secrets.compare_digest(x_api_key, settings.API_KEY):
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="API Key tidak valid",
-            )
-        return x_api_key
-
+        return verify_write_api_key(x_api_key, settings)
     return None

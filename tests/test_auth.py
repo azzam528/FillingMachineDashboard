@@ -18,7 +18,7 @@ async def test_tulis_tanpa_api_key(client):
         "jenis": "estop_tekan",
         "sumber": "pemain",
     }
-    response = await client.post("/api/v1/event", json=payload)
+    response = await client.post("/api/event", json=payload)
     assert response.status_code == 401
     assert "X-Api-Key" in response.json().get("detail", "")
 
@@ -35,7 +35,7 @@ async def test_tulis_api_key_salah(client):
         "sumber": "pemain",
     }
     response = await client.post(
-        "/api/v1/event",
+        "/api/event",
         headers={"X-Api-Key": "kunci-salah-palsu"},
         json=payload,
     )
@@ -46,7 +46,7 @@ async def test_tulis_api_key_salah(client):
 @pytest.mark.asyncio
 async def test_baca_require_key_false(client):
     """Saat REQUIRE_KEY_FOR_READ=False, endpoint GET dapat diakses publik tanpa API Key."""
-    response = await client.get("/api/v1/mesin/mesin-01")
+    response = await client.get("/api/mesin/mesin-01")
     assert response.status_code == 200
     assert response.json()["_id"] == "mesin-01"
 
@@ -64,21 +64,20 @@ async def test_baca_require_key_true(client, test_settings):
     app.dependency_overrides[get_settings] = lambda: read_restricted_settings
 
     # 1. Tanpa header -> 401
-    res1 = await client.get("/api/v1/mesin/mesin-01")
+    res1 = await client.get("/api/mesin/mesin-01")
     assert res1.status_code == 401
 
     # 2. Key salah -> 401
     res2 = await client.get(
-        "/api/v1/mesin/mesin-01",
+        "/api/mesin/mesin-01",
         headers={"X-Api-Key": "kunci-salah"},
     )
     assert res2.status_code == 401
 
     # 3. Key benar -> 200
     res3 = await client.get(
-        "/api/v1/mesin/mesin-01",
+        "/api/mesin/mesin-01",
         headers={"X-Api-Key": VALID_KEY},
     )
     assert res3.status_code == 200
     assert res3.json()["_id"] == "mesin-01"
-

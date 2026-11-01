@@ -21,8 +21,10 @@ REST API ini dibangun menggunakan **Python 3.12**, **FastAPI**, **Pydantic v2**,
 4. **Penambahan Field `pengguna` (Multi-Pengguna Digital Twin)**:
    Karena beberapa pengembang/operator menjalankan simulasi Unity masing-masing dan mengirim data ke mesin yang sama (`mesin-01`), setiap payload `telemetri`, `event`, dan `botol` diwajibkan membawa field `pengguna`. Nilai yang sah dibaca dari konfigurasi `PENGGUNA_VALID` (`gibral`, `haikal`, `alvin`, `naya`), dinormalisasi ke huruf kecil, dan jika di luar daftar akan ditolak **HTTP 400**.
 5. **Rincian Per Pengguna pada Endpoint Ringkasan**:
-   Endpoint `GET /api/v1/mesin/{id}/ringkasan` diperluas dengan field `rincian_pengguna` saat query parameter `pengguna` tidak diisi, menyajikan rincian statistik (botol, gagal, rata-rata siklus, durasi darurat) untuk setiap pengguna secara terpisah.
-6. **Konfirmasi Jenis Event E-stop**:
+   Endpoint `GET /api/mesin/{id}/ringkasan` diperluas dengan field `rincian_pengguna` saat query parameter `pengguna` tidak diisi, menyajikan rincian statistik (botol, gagal, rata-rata siklus, durasi darurat) untuk setiap pengguna secara terpisah.
+6. **Penghapusan API Versioning `/v1`**:
+   Seluruh endpoint dipindahkan dari `/api/v1/...` menjadi `/api/...` untuk penyederhanaan arsitektur dan kemudahan konsumsi API.
+7. **Konfirmasi Jenis Event E-stop**:
    Sesuai konfirmasi, jenis event untuk penekanan dan pelepasan E-stop dibakukan menggunakan format snake_case Bahasa Indonesia: `estop_tekan` dan `estop_lepas`.
 
 ---
@@ -31,27 +33,27 @@ REST API ini dibangun menggunakan **Python 3.12**, **FastAPI**, **Pydantic v2**,
 
 | No | File | Deskripsi Singkat |
 |:---|:---|:---|
-| 1 | `app/main.py` | Entrypoint FastAPI, pengelolaan lifecycle koneksi MongoDB, exception handler validasi 400 Bahasa Indonesia, dan registrasi router. |
+| 1 | `app/main.py` | Entrypoint FastAPI, pengelolaan lifecycle koneksi MongoDB, exception handler validasi 400 Bahasa Indonesia, dan registrasi router tanpa `/v1`. |
 | 2 | `app/config.py` | Pengaturan konfigurasi aplikasi berbasis `pydantic-settings` (koneksi URI, API Key, daftar pengguna, konstanta e-stop). |
 | 3 | `app/db.py` | Inisialisasi client asynchronous Motor MongoDB (`AsyncIOMotorClient`) dan penyedia dependency database aktif. |
 | 4 | `app/auth.py` | Dependency autentikasi header `X-Api-Key` menggunakan `compare_digest`, proteksi baca, dan validasi eksistensi `mesin_id`. |
 | 5 | `app/models.py` | Model data Pydantic v2 untuk payload tulis, validasi timestamp ISO 8601 UTC aware, normalisasi pengguna, enum, dan model respons. |
-| 6 | `app/routers/tulis.py` | Endpoint POST `/telemetri` (batch 1–10 + dedup API), `/event` (idempoten), dan `/botol` (idempoten). |
-| 7 | `app/routers/baca.py` | Endpoint GET `/mesin/{id}`, `/mesin/{id}/status`, `/mesin/{id}/ringkasan` (agregasi & durasi e-stop), dan `/mesin/{id}/event`. |
-| 8 | `app/routers/health.py` | Endpoint GET `/health` dan `/api/v1/health` untuk pemeriksaan status liveness server dan ping database MongoDB. |
+| 6 | `app/routers/tulis.py` | Endpoint POST `/api/telemetri` (batch 1–10 + dedup API), `/api/event` (idempoten), dan `/api/botol` (idempoten). |
+| 7 | `app/routers/baca.py` | Endpoint GET `/api/mesin/{id}`, `/api/mesin/{id}/status`, `/api/mesin/{id}/ringkasan` (agregasi & durasi e-stop), dan `/api/mesin/{id}/event`. |
+| 8 | `app/routers/health.py` | Endpoint GET `/health` dan `/api/health` untuk pemeriksaan status liveness server dan ping database MongoDB. |
 | 9 | `scripts/seed_contoh.py` | Script CLI pengiriman data contoh (telemetri, event, botol) ke server REST API via HTTP client. |
 | 10 | `tests/conftest.py` | Konfigurasi pytest, fixture AsyncClient httpx, dan isolasi database test `liquidfilling_test`. |
 | 11 | `tests/test_auth.py` | Pengujian keamanan header `X-Api-Key`, penolakan 401 saat key hilang/salah, dan toggle proteksi baca. |
 | 12 | `tests/test_validation.py` | Pengujian penolakan 400 untuk field wajib hilang, enum salah, timestamp naive tanpa timezone, dan pengguna tidak sah. |
 | 13 | `tests/test_tulis.py` | Pengujian batch telemetri (1-10 data), deduplikasi `id_kirim`, timestamp `diterima`, dan idempotensi event/botol. |
 | 14 | `tests/test_baca.py` | Pengujian GET konfigurasi mesin, status telemetri terakhir, filter pengguna, dan verifikasi perhitungan manual ringkasan. |
-| 15 | `tests/test_health.py` | Pengujian endpoint health check saat database terhubung. |
+| 15 | `tests/test_health.py` | Pengujian endpoint health check saat database terhubung dan verifikasi 404 untuk endpoint lama `/api/v1/...`. |
 | 16 | `requirements.txt` | Daftar dependensi paket Python proyek (FastAPI, Uvicorn, Motor, Pydantic, Pytest, Mongomock-Motor, dll). |
 | 17 | `.env.example` | Template variabel lingkungan aman tanpa nilai rahasia untuk panduan deployment. |
 | 18 | `.env` | File konfigurasi lokal aktif dengan kredensial Atlas (terproteksi oleh `.gitignore`). |
 | 19 | `.gitignore` | Konfigurasi pengabaian file Git untuk mencegah kebocoran kredensial, cache bytecode, dan file temporary. |
 | 20 | `pytest.ini` | Konfigurasi runner pengujian pytest dengan dukungan asynchronous (`asyncio_mode = auto`). |
-| 21 | `Dockerfile` | Definisi kontainerisasi multi-stage berbasis `python:3.12-slim` untuk standarisasi deployment server. |
+| 21 | `Dockerfile` | Definisi kontainerisasi multi-stage berbasis `python:3.12-slim` dengan HEALTHCHECK. |
 | 22 | `setup_mongodb.py` | Script inisialisasi skema validator $jsonSchema dan indeks awal database `liquidfilling` di MongoDB Atlas. |
 | 23 | `README.md` | Dokumentasi lengkap arsitektur, panduan instalasi, pengujian, deployment Docker, dan contoh perintah cURL. |
 | 24 | `LAPORAN.md` | Laporan evaluasi teknis backend lengkap, transparansi pengujian, dan instruksi operasional VPS. |
@@ -61,7 +63,7 @@ REST API ini dibangun menggunakan **Python 3.12**, **FastAPI**, **Pydantic v2**,
 ## 3. Daftar Endpoint dan Contoh Request / Response Singkat
 
 ### A. Endpoint Tulis (Wajib Header `X-Api-Key`)
-1. **`POST /api/v1/telemetri`**
+1. **`POST /api/telemetri`**
    - **Request**: Array 1–10 dokumen telemetri.
      ```json
      [
@@ -87,7 +89,7 @@ REST API ini dibangun menggunakan **Python 3.12**, **FastAPI**, **Pydantic v2**,
      {"status": "sukses", "pesan": "1 data tersimpan, 0 duplikat diabaikan", "tersimpan": 1, "duplikat_diabaikan": 0}
      ```
 
-2. **`POST /api/v1/event`**
+2. **`POST /api/event`**
    - **Request**: 1 dokumen kejadian mesin.
      ```json
      {
@@ -109,7 +111,7 @@ REST API ini dibangun menggunakan **Python 3.12**, **FastAPI**, **Pydantic v2**,
      ```
    - *Kirim ulang id_kirim sama*: `{"status": "sukses", "pesan": "duplikat diabaikan", "id_kirim": "ev-01", "tersimpan": false, "id": null}`
 
-3. **`POST /api/v1/botol`**
+3. **`POST /api/botol`**
    - **Request**: 1 dokumen botol selesai.
      ```json
      {
@@ -132,13 +134,13 @@ REST API ini dibangun menggunakan **Python 3.12**, **FastAPI**, **Pydantic v2**,
      ```
 
 ### B. Endpoint Baca & Pemantauan
-4. **`GET /api/v1/mesin/{id}`**
+4. **`GET /api/mesin/{id}`**
    - **Response (HTTP 200)**: Dokumen konfigurasi mesin dari collection `mesin`.
 
-5. **`GET /api/v1/mesin/{id}/status?pengguna=gibral`**
+5. **`GET /api/mesin/{id}/status?pengguna=gibral`**
    - **Response (HTTP 200)**: Dokumen telemetri terakhir dari mesin (atau milik pengguna tertentu jika difilter).
 
-6. **`GET /api/v1/mesin/{id}/ringkasan?dari=&sampai=&sesi_id=&pengguna=`**
+6. **`GET /api/mesin/{id}/ringkasan?dari=&sampai=&sesi_id=&pengguna=`**
    - **Response (HTTP 200)**:
      ```json
      {
@@ -157,10 +159,10 @@ REST API ini dibangun menggunakan **Python 3.12**, **FastAPI**, **Pydantic v2**,
      }
      ```
 
-7. **`GET /api/v1/mesin/{id}/event?jenis=&dari=&sampai=&pengguna=&limit=100`**
+7. **`GET /api/mesin/{id}/event?jenis=&dari=&sampai=&pengguna=&limit=100`**
    - **Response (HTTP 200)**: Array riwayat kejadian terurut menurun (*newest first*).
 
-8. **`GET /api/v1/health` & `GET /health`**
+8. **`GET /api/health` & `GET /health`**
    - **Response (HTTP 200)**:
      ```json
      {"status": "ok", "database": "terhubung", "waktu": "2026-10-29T10:30:00.123456+00:00", "detail": null}
@@ -210,14 +212,14 @@ Perintah yang dijalankan:
 ```
 
 Hasil Pengujian:
-- **Total Test Cases**: **24 passed** (0 failed, 0 error).
-- **Waktu Eksekusi**: 0.38 detik.
+- **Total Test Cases**: **25 passed** (0 failed, 0 error).
+- **Waktu Eksekusi**: ~0.4 detik.
 - Rincian modul pengujian:
   - `tests/test_auth.py` (4 tests): Verifikasi penolakan 401 saat key tidak ada/salah, verifikasi akses GET publik, dan toggle `REQUIRE_KEY_FOR_READ=True`.
   - `tests/test_validation.py` (7 tests): Penolakan 400 untuk field wajib hilang, enum salah, timestamp naive tanpa zona waktu, pengguna tidak sah, normalisasi pengguna case-insensitive, penolakan mesin_id tidak terdaftar, dan kelolosan extra fields.
   - `tests/test_tulis.py` (7 tests): Penyimpanan telemetri batch 1-10, penolakan batch kosong dan >10 data, deduplikasi `id_kirim` telemetri di API, verifikasi server timestamp `diterima`, serta idempotensi event & botol saat `id_kirim` dikirim ulang.
   - `tests/test_baca.py` (5 tests): GET mesin, status terakhir per pengguna, pagination & limit event, verifikasi hitungan manual ringkasan (botol, gagal, rata-rata siklus, durasi darurat, rincian pengguna), dan kalkulasi E-stop tanpa lepas.
-  - `tests/test_health.py` (1 test): Verifikasi status health check API dan koneksi database.
+  - `tests/test_health.py` (2 tests): Verifikasi status health check API (`/api/health` & `/health`) dan verifikasi bahwa seluruh path lama `/api/v1/...` mengembalikan `404 Not Found`.
 
 ### B. Pengujian Live End-to-End (`scripts/seed_contoh.py`)
 Perintah yang dijalankan:
@@ -342,6 +344,5 @@ Laporan ini secara jujur mencatat batasan pengujian yang belum dieksekusi:
    ```
 3. **Verifikasi Layanan di VPS**:
    ```bash
-   curl -X GET "https://api.fillingmachine.domainkamu.com/api/v1/health"
+   curl -X GET "https://api.fillingmachine.domainkamu.com/api/health"
    ```
-

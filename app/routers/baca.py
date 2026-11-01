@@ -1,7 +1,7 @@
-"""Router untuk endpoint baca: status mesin, telemetri, event, ringkasan (prefix /api/v1)."""
+"""Router untuk endpoint baca: status mesin, telemetri, event, ringkasan (prefix /api)."""
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.auth import verify_read_access
@@ -17,13 +17,33 @@ router = APIRouter(prefix="/mesin", tags=["Baca Data"])
 
 
 def _serialize_doc(doc: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """Helper untuk mengonversi ObjectId MongoDB ke string dan memastikan serialisasi aman."""
+    """Helper untuk mengonversi ObjectId MongoDB ke string."""
     if not doc:
         return None
     d = dict(doc)
     if "_id" in d:
         d["_id"] = str(d["_id"])
     return d
+
+
+def _parse_rentang_waktu(dari: Optional[str], sampai: Optional[str]) -> Tuple[Optional[datetime], Optional[datetime]]:
+    """Helper untuk memvalidasi dan mengurai rentang waktu 'dari' dan 'sampai'."""
+    try:
+        dt_dari = parse_iso8601_utc(dari) if dari else None
+        dt_sampai = parse_iso8601_utc(sampai) if sampai else None
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Parameter filter waktu tidak valid: {str(e)}",
+        )
+
+    if dt_dari and dt_sampai and dt_dari > dt_sampai:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Parameter 'dari' tidak boleh lebih besar dari 'sampai'",
+        )
+
+    return dt_dari, dt_sampai
 
 
 @router.get(
@@ -60,10 +80,7 @@ async def ambil_status_terakhir(
     if pengguna:
         query["pengguna"] = pengguna.strip().lower()
 
-    doc = await db.telemetri.find_one(
-        query,
-        sort=[("waktu", -1)],
-    )
+    doc = await db.telemetri.find_one(query, sort=[("waktu", -1)])
     if not doc:
         detail_msg = f"Data telemetri untuk mesin '{id}' belum tersedia"
         if pengguna:
@@ -90,123 +107,70 @@ async def ambil_ringkasan_produksi(
     settings: Settings = Depends(get_settings),
 ):
     """Menghitung ringkasan produksi:
-
     - Jumlah botol, botol gagal (status != 'OK'), rata-rata waktu siklus (detik).
     - Total durasi Darurat (E-stop) berpasangan (estop_tekan & estop_lepas).
     - Filter opsional: dari, sampai, sesi_id, pengguna.
     - Menampilkan rincian per pengguna jika filter pengguna tidak diberikan.
     """
     db = get_db()
-
-    # Parse rentang waktu jika ada
-    dt_dari: Optional[datetime] = None
-    dt_sampai: Optional[datetime] = None
-
-    try:
-        if dari:
-            dt_dari = parse_iso8601_utc(dari)
-        if sampai:
-            dt_sampai = parse_iso8601_utc(sampai)
-    except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Parameter filter waktu tidak valid: {str(e)}",
-        )
-
-    if dt_dari and dt_sampai and dt_dari > dt_sampai:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Parameter 'dari' tidak boleh lebih besar dari 'sampai'",
-        )
-
+    dt_dari, dt_sampai = _parse_rentang_waktu(dari, sampai)
     norm_pengguna = pengguna.strip().lower() if pengguna else None
 
-    # =========================================================================
-    # 1. Agregasi Data Botol
-    # =========================================================================
+    # 1. Agregasi Data Botol (dikelompokkan per pengguna)
     match_botol: Dict[str, Any] = {"mesin_id": id}
     if sesi_id:
         match_botol["sesi_id"] = sesi_id
     if norm_pengguna:
         match_botol["pengguna"] = norm_pengguna
-
     if dt_dari or dt_sampai:
-        time_filter: Dict[str, Any] = {}
+        tf: Dict[str, Any] = {}
         if dt_dari:
-            time_filter["$gte"] = dt_dari
+            tf["$gte"] = dt_dari
         if dt_sampai:
-            time_filter["$lte"] = dt_sampai
-        match_botol["waktu_keluar"] = time_filter
+            tf["$lte"] = dt_sampai
+        match_botol["waktu_keluar"] = tf
+
+    pipeline_botol = [
+        {"$match": match_botol},
+        {
+            "$group": {
+                "_id": "$pengguna",
+                "total_botol": {"$sum": 1},
+                "botol_gagal": {
+                    "$sum": {"$cond": [{"$ne": ["$status", "OK"]}, 1, 0]}
+                },
+                "total_siklus_detik": {
+                    "$sum": {
+                        "$divide": [
+                            {"$subtract": ["$waktu_keluar", "$waktu_masuk"]},
+                            1000.0,
+                        ]
+                    }
+                },
+            }
+        },
+    ]
 
     user_botol_stats: Dict[str, Dict[str, Any]] = {}
     overall_total_botol = 0
     overall_botol_gagal = 0
     overall_cycle_sum = 0.0
 
-    if norm_pengguna:
-        # Query untuk pengguna tunggal
-        pipeline_single = [
-            {"$match": match_botol},
-            {
-                "$group": {
-                    "_id": None,
-                    "total_botol": {"$sum": 1},
-                    "botol_gagal": {
-                        "$sum": {"$cond": [{"$ne": ["$status", "OK"]}, 1, 0]}
-                    },
-                    "total_siklus_detik": {
-                        "$sum": {
-                            "$divide": [
-                                {"$subtract": ["$waktu_keluar", "$waktu_masuk"]},
-                                1000.0,
-                            ]
-                        }
-                    },
-                }
-            },
-        ]
-        res = await db.botol.aggregate(pipeline_single).to_list(1)
-        if res:
-            overall_total_botol = int(res[0].get("total_botol", 0))
-            overall_botol_gagal = int(res[0].get("botol_gagal", 0))
-            overall_cycle_sum = float(res[0].get("total_siklus_detik", 0.0))
-    else:
-        # Group by pengguna untuk menyajikan rincian per pengguna
-        pipeline_per_user = [
-            {"$match": match_botol},
-            {
-                "$group": {
-                    "_id": "$pengguna",
-                    "total_botol": {"$sum": 1},
-                    "botol_gagal": {
-                        "$sum": {"$cond": [{"$ne": ["$status", "OK"]}, 1, 0]}
-                    },
-                    "total_siklus_detik": {
-                        "$sum": {
-                            "$divide": [
-                                {"$subtract": ["$waktu_keluar", "$waktu_masuk"]},
-                                1000.0,
-                            ]
-                        }
-                    },
-                }
-            },
-        ]
-        user_rows = await db.botol.aggregate(pipeline_per_user).to_list(100)
-        for row in user_rows:
-            u = row.get("_id") or "unknown"
-            t_botol = int(row.get("total_botol", 0))
-            b_gagal = int(row.get("botol_gagal", 0))
-            c_sum = float(row.get("total_siklus_detik", 0.0))
-            user_botol_stats[u] = {
-                "total_botol": t_botol,
-                "botol_gagal": b_gagal,
-                "total_siklus_detik": c_sum,
-                "rata_rata_siklus": round(c_sum / t_botol, 3) if t_botol > 0 else 0.0,
-            }
-            overall_total_botol += t_botol
-            overall_botol_gagal += b_gagal
-            overall_cycle_sum += c_sum
+    user_rows = await db.botol.aggregate(pipeline_botol).to_list(None)
+    for row in user_rows:
+        u = row.get("_id") or "unknown"
+        t_botol = int(row.get("total_botol", 0))
+        b_gagal = int(row.get("botol_gagal", 0))
+        c_sum = float(row.get("total_siklus_detik", 0.0))
+        user_botol_stats[u] = {
+            "total_botol": t_botol,
+            "botol_gagal": b_gagal,
+            "total_siklus_detik": c_sum,
+            "rata_rata_siklus": round(c_sum / t_botol, 3) if t_botol > 0 else 0.0,
+        }
+        overall_total_botol += t_botol
+        overall_botol_gagal += b_gagal
+        overall_cycle_sum += c_sum
 
     overall_avg_cycle = (
         round(overall_cycle_sum / overall_total_botol, 3)
@@ -214,9 +178,7 @@ async def ambil_ringkasan_produksi(
         else 0.0
     )
 
-    # =========================================================================
     # 2. Hitung Total Durasi Darurat (E-stop)
-    # =========================================================================
     estop_tekan_jenis = settings.EVENT_JENIS_ESTOP_TEKAN
     estop_lepas_jenis = settings.EVENT_JENIS_ESTOP_LEPAS
 
@@ -229,18 +191,26 @@ async def ambil_ringkasan_produksi(
     if norm_pengguna:
         match_event["pengguna"] = norm_pengguna
 
-    cursor_event = db.event.find(match_event).sort([("sesi_id", 1), ("waktu", 1)])
-    events = await cursor_event.to_list(length=None)
+    events = await db.event.find(match_event).sort([("sesi_id", 1), ("waktu", 1)]).to_list(None)
 
     now_utc = datetime.now(timezone.utc)
     total_durasi_darurat = 0.0
     user_durasi_darurat: Dict[str, float] = {}
 
+    def _tambah_durasi(t_start: datetime, t_end: datetime, user: Optional[str]) -> None:
+        nonlocal total_durasi_darurat
+        s = max(t_start, dt_dari) if dt_dari else t_start
+        e = min(t_end, dt_sampai) if dt_sampai else t_end
+        if e > s:
+            dur = (e - s).total_seconds()
+            total_durasi_darurat += dur
+            if user:
+                user_durasi_darurat[user] = user_durasi_darurat.get(user, 0.0) + dur
+
     # Kelompokkan event per sesi_id
     sesi_events: Dict[str, List[Dict[str, Any]]] = {}
     for ev in events:
-        s_id = ev.get("sesi_id", "")
-        sesi_events.setdefault(s_id, []).append(ev)
+        sesi_events.setdefault(ev.get("sesi_id", ""), []).append(ev)
 
     for s_id, ev_list in sesi_events.items():
         active_tekan_waktu: Optional[datetime] = None
@@ -258,59 +228,26 @@ async def ambil_ringkasan_produksi(
             if jenis == estop_tekan_jenis:
                 if active_tekan_waktu is None:
                     active_tekan_waktu = ev_waktu
-            elif jenis == estop_lepas_jenis:
-                if active_tekan_waktu is not None:
-                    t_start = active_tekan_waktu
-                    t_end = ev_waktu
+            elif jenis == estop_lepas_jenis and active_tekan_waktu is not None:
+                _tambah_durasi(active_tekan_waktu, ev_waktu, sesi_user)
+                active_tekan_waktu = None
 
-                    # Potong sesuai rentang [dari, sampai] jika diminta
-                    start_effective = max(t_start, dt_dari) if dt_dari else t_start
-                    end_effective = min(t_end, dt_sampai) if dt_sampai else t_end
-
-                    if end_effective > start_effective:
-                        dur = (end_effective - start_effective).total_seconds()
-                        total_durasi_darurat += dur
-                        if sesi_user:
-                            user_durasi_darurat[sesi_user] = (
-                                user_durasi_darurat.get(sesi_user, 0.0) + dur
-                            )
-
-                    active_tekan_waktu = None
-
-        # Jika masih dalam kondisi ditekan tanpa lepas
+        # Jika masih dalam kondisi ditekan tanpa dilepas
         if active_tekan_waktu is not None:
-            t_start = active_tekan_waktu
-            t_end = dt_sampai if dt_sampai else now_utc
+            _tambah_durasi(active_tekan_waktu, dt_sampai or now_utc, sesi_user)
 
-            start_effective = max(t_start, dt_dari) if dt_dari else t_start
-            end_effective = min(t_end, dt_sampai) if dt_sampai else t_end
-
-            if end_effective > start_effective:
-                dur = (end_effective - start_effective).total_seconds()
-                total_durasi_darurat += dur
-                if sesi_user:
-                    user_durasi_darurat[sesi_user] = (
-                        user_durasi_darurat.get(sesi_user, 0.0) + dur
-                    )
-
-    # =========================================================================
-    # 3. Bentuk Rincian per Pengguna jika pengguna tidak difilter
-    # =========================================================================
+    # 3. Bentuk Rincian per Pengguna (hanya jika pengguna tidak difilter)
     rincian_pengguna: Optional[Dict[str, RingkasanStatistik]] = None
     if not norm_pengguna:
         rincian_pengguna = {}
         all_users = set(user_botol_stats.keys()).union(user_durasi_darurat.keys())
         for u in sorted(all_users):
             b_data = user_botol_stats.get(u, {})
-            u_botol = b_data.get("total_botol", 0)
-            u_gagal = b_data.get("botol_gagal", 0)
-            u_avg = b_data.get("rata_rata_siklus", 0.0)
-            u_durasi = round(user_durasi_darurat.get(u, 0.0), 3)
             rincian_pengguna[u] = RingkasanStatistik(
-                jumlah_botol=u_botol,
-                botol_gagal=u_gagal,
-                rata_rata_waktu_siklus_detik=u_avg,
-                total_durasi_darurat_detik=u_durasi,
+                jumlah_botol=b_data.get("total_botol", 0),
+                botol_gagal=b_data.get("botol_gagal", 0),
+                rata_rata_waktu_siklus_detik=b_data.get("rata_rata_siklus", 0.0),
+                total_durasi_darurat_detik=round(user_durasi_darurat.get(u, 0.0), 3),
             )
 
     return RingkasanResponse(
@@ -345,8 +282,9 @@ async def ambil_riwayat_event(
 ):
     """Membaca daftar event mesin, terurut dari yang terbaru (waktu descending)."""
     db = get_db()
-    query: Dict[str, Any] = {"mesin_id": id}
+    dt_dari, dt_sampai = _parse_rentang_waktu(dari, sampai)
 
+    query: Dict[str, Any] = {"mesin_id": id}
     if jenis:
         query["jenis"] = jenis
     if sesi_id:
@@ -354,28 +292,13 @@ async def ambil_riwayat_event(
     if pengguna:
         query["pengguna"] = pengguna.strip().lower()
 
-    try:
-        dt_dari = parse_iso8601_utc(dari) if dari else None
-        dt_sampai = parse_iso8601_utc(sampai) if sampai else None
-    except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Parameter filter waktu tidak valid: {str(e)}",
-        )
-
-    if dt_dari and dt_sampai and dt_dari > dt_sampai:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Parameter 'dari' tidak boleh lebih besar dari 'sampai'",
-        )
-
     if dt_dari or dt_sampai:
-        time_filter: Dict[str, Any] = {}
+        tf: Dict[str, Any] = {}
         if dt_dari:
-            time_filter["$gte"] = dt_dari
+            tf["$gte"] = dt_dari
         if dt_sampai:
-            time_filter["$lte"] = dt_sampai
-        query["waktu"] = time_filter
+            tf["$lte"] = dt_sampai
+        query["waktu"] = tf
 
     cursor = db.event.find(query).sort("waktu", -1).limit(limit)
     events = []

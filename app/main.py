@@ -53,13 +53,10 @@ def _format_loc(loc: tuple) -> str:
     for p in parts:
         if p.isdigit():
             formatted += f"[{p}]"
+        elif formatted:
+            formatted += f".{p}"
         else:
-            if formatted and not formatted.endswith("]"):
-                formatted += f".{p}"
-            elif formatted and formatted.endswith("]"):
-                formatted += f".{p}"
-            else:
-                formatted += p
+            formatted = p
     return formatted
 
 
@@ -102,14 +99,13 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     """Mengubah error validasi bawaan FastAPI (HTTP 422) menjadi HTTP 400 Bad Request
     dengan format daftar field yang salah dalam Bahasa Indonesia.
     """
-    errors: List[Dict[str, str]] = []
-    for err in exc.errors():
-        field_path = _format_loc(err.get("loc", ()))
-        message = _translate_message(err.get("msg", "Data tidak valid"))
-        errors.append({
-            "field": field_path,
-            "pesan": message,
-        })
+    errors: List[Dict[str, str]] = [
+        {
+            "field": _format_loc(err.get("loc", ())),
+            "pesan": _translate_message(err.get("msg", "Data tidak valid")),
+        }
+        for err in exc.errors()
+    ]
 
     return JSONResponse(
         status_code=status.HTTP_400_BAD_REQUEST,
@@ -120,10 +116,10 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     )
 
 
-# Registrasi router dengan prefix /api/v1
-app.include_router(health.router, prefix="/api/v1")
-app.include_router(tulis.router, prefix="/api/v1")
-app.include_router(baca.router, prefix="/api/v1")
+# Registrasi router dengan prefix /api (tanpa versi /v1)
+app.include_router(health.router, prefix="/api")
+app.include_router(tulis.router, prefix="/api")
+app.include_router(baca.router, prefix="/api")
 
-# Endpoint /health di root juga disediakan untuk kemudahan monitoring & docker healthcheck
+# Endpoint /health di root dipertahankan untuk healthcheck Docker
 app.include_router(health.router)
