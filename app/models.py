@@ -187,6 +187,8 @@ class RingkasanStatistik(BaseModel):
     botol_gagal: int
     rata_rata_waktu_siklus_detik: float
     total_durasi_darurat_detik: float
+    botol_ok: int = 0
+    kategori_kegagalan: Dict[str, int] = Field(default_factory=dict)
 
 
 class RingkasanResponse(BaseModel):
@@ -198,7 +200,56 @@ class RingkasanResponse(BaseModel):
     botol_gagal: int
     rata_rata_waktu_siklus_detik: float
     total_durasi_darurat_detik: float
+    botol_ok: int = 0
+    kategori_kegagalan: Dict[str, int] = Field(default_factory=dict)
     rincian_pengguna: Optional[Dict[str, RingkasanStatistik]] = None
+
+
+class KejadianDowntimeItem(BaseModel):
+    sesi_id: Optional[str] = None
+    pengguna: Optional[str] = None
+    waktu_mulai: str
+    waktu_selesai: Optional[str] = None
+    durasi_detik: float
+    status: str
+    pesan: Optional[str] = None
+
+
+class DowntimeResponse(BaseModel):
+    mesin_id: str
+    rentang: Dict[str, Optional[str]]
+    total_durasi_downtime_detik: float
+    jumlah_kejadian_downtime: int
+    kejadian: List[KejadianDowntimeItem]
+    rincian_pengguna: Optional[Dict[str, float]] = None
+
+
+class LaporanProduksiSection(BaseModel):
+    total_botol: int
+    rata_rata_waktu_siklus_detik: float
+    total_waktu_siklus_detik: float
+
+
+class LaporanKualitasSection(BaseModel):
+    botol_ok: int
+    botol_gagal: int
+    persentase_ok: float
+    kategori_kegagalan: Dict[str, int]
+
+
+class LaporanDowntimeSection(BaseModel):
+    total_durasi_detik: float
+    jumlah_kejadian: int
+
+
+class LaporanResponse(BaseModel):
+    mesin_id: str
+    rentang: Dict[str, Optional[str]]
+    filter: Dict[str, Optional[str]]
+    produksi: LaporanProduksiSection
+    kualitas: LaporanKualitasSection
+    downtime: LaporanDowntimeSection
+    rincian_pengguna: Optional[Dict[str, Any]] = None
 
 
 class HealthResponse(BaseModel):
