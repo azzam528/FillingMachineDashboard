@@ -2,12 +2,13 @@
 
 import logging
 from contextlib import asynccontextmanager
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.config import get_settings
+from app.config import Settings, get_settings
 from app.db import close_db_connection, connect_to_db
 from app.routers import baca, health, tulis
 
@@ -27,20 +28,6 @@ async def lifespan(app: FastAPI):
     yield
     logger.info("Menghentikan aplikasi...")
     await close_db_connection()
-
-
-settings = get_settings()
-
-app = FastAPI(
-    title="Liquid Filling Machine REST API",
-    description=(
-        "REST API perantara antara digital twin Unity dan MongoDB Atlas "
-        "untuk sistem pencatatan data mesin pengisi botol rotary 10 slot."
-    ),
-    version="1.0.0",
-    lifespan=lifespan,
-    debug=settings.DEBUG,
-)
 
 
 def _format_loc(loc: tuple) -> str:
@@ -97,7 +84,6 @@ def _translate_message(msg: str) -> str:
     return msg
 
 
-@app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     """Mengubah error validasi bawaan FastAPI (HTTP 422) menjadi HTTP 400 Bad Request
     dengan format daftar field yang salah dalam Bahasa Indonesia.
@@ -120,10 +106,46 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     )
 
 
-# Registrasi router dengan prefix /api/v1
-app.include_router(health.router, prefix="/api/v1")
-app.include_router(tulis.router, prefix="/api/v1")
-app.include_router(baca.router, prefix="/api/v1")
+def create_app(custom_settings: Optional[Settings] = None) -> FastAPI:
+    """Factory function untuk inisialisasi aplikasi FastAPI dengan konfigurasi."""
+    current_settings = custom_settings or get_settings()
 
-# Endpoint /health di root juga disediakan untuk kemudahan monitoring & docker healthcheck
-app.include_router(health.router)
+    app_instance = FastAPI(
+        title="Liquid Filling Machine REST API",
+        description=(
+            "REST API perantara antara digital twin Unity dan MongoDB Atlas "
+            "untuk sistem pencatatan data mesin pengisi botol rotary 10 slot."
+        ),
+        version="1.0.0",
+        lifespan=lifespan,
+        debug=current_settings.DEBUG,
+        servers=[{"url": current_settings.API_BASE_URL, "description": "API Base URL"}] if current_settings.API_BASE_URL else None,
+    )
+
+    # Konfigurasi CORS Middleware untuk integrasi Frontend MES
+    # Mengizinkan origin yang terdaftar (tidak menggunakan wildcard '*' pada production)
+    app_instance.add_middleware(
+        CORSMiddleware,
+        allow_origins=current_settings.cors_origins_list,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    # Registrasi exception handler validasi Pydantic
+    app_instance.add_exception_handler(RequestValidationError, validation_exception_handler)
+
+    # Registrasi router dengan prefix dinamis dari konfigurasi (default /api/v1)
+    api_prefix = current_settings.API_V1_STR.rstrip("/")
+    app_instance.include_router(health.router, prefix=api_prefix)
+    app_instance.include_router(tulis.router, prefix=api_prefix)
+    app_instance.include_router(baca.router, prefix=api_prefix)
+
+    # Endpoint /health di root juga disediakan untuk kemudahan monitoring & docker healthcheck
+    app_instance.include_router(health.router)
+
+    return app_instance
+
+
+settings = get_settings()
+app = create_app(settings)

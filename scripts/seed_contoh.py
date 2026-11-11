@@ -24,27 +24,33 @@ def main():
         help="Base URL API (default: http://127.0.0.1:8000)",
     )
     parser.add_argument(
+        "--prefix",
+        default=os.environ.get("API_V1_STR", "/api/v1"),
+        help="Prefix routing API (default: /api/v1)",
+    )
+    parser.add_argument(
         "--api-key",
-        default=os.environ.get("API_KEY", "Sj0ETn-bp1lMiGASdQfdW5WiGEoIU2XskRp41IKy9vU"),
+        default=os.environ.get("API_KEY", "rahasia-api-key"),
         help="API Key untuk header X-Api-Key",
     )
     args = parser.parse_args()
 
     base_url = args.url.rstrip("/")
+    api_prefix = args.prefix.rstrip("/")
     headers = {
         "X-Api-Key": args.api_key,
         "Content-Type": "application/json",
     }
 
     print(f"==================================================")
-    print(f"Menjalankan Seeding Data Contoh ke API: {base_url}")
+    print(f"Menjalankan Seeding Data Contoh ke API: {base_url}{api_prefix}")
     print(f"==================================================")
 
     with httpx.Client(base_url=base_url, timeout=10.0) as client:
         # 1. Cek Health
         print("\n[1/6] Memeriksa /health ...")
         try:
-            r_health = client.get("/api/v1/health")
+            r_health = client.get(f"{api_prefix}/health")
             print(f"  Status: {r_health.status_code} - {r_health.json()}")
         except Exception as e:
             print(f"  [GAGAL TERHUBUNG] Pastikan server API sedang berjalan: {e}")
@@ -81,7 +87,7 @@ def main():
                 },
             })
 
-        r_tel = client.post("/api/v1/telemetri", headers=headers, json=telemetri_batch)
+        r_tel = client.post(f"{api_prefix}/telemetri", headers=headers, json=telemetri_batch)
         print(f"  Status: {r_tel.status_code} - {r_tel.text}")
 
         # 3. Kirim Event START & E-stop
@@ -125,7 +131,7 @@ def main():
             },
         ]
         for ev in events:
-            r_ev = client.post("/api/v1/event", headers=headers, json=ev)
+            r_ev = client.post(f"{api_prefix}/event", headers=headers, json=ev)
             print(f"  POST /event ({ev['jenis']}): {r_ev.status_code} - {r_ev.json().get('pesan')}")
 
         # 4. Kirim Data Botol Selesai
@@ -181,17 +187,17 @@ def main():
             },
         ]
         for b in botol_samples:
-            r_b = client.post("/api/v1/botol", headers=headers, json=b)
+            r_b = client.post(f"{api_prefix}/botol", headers=headers, json=b)
             print(f"  POST /botol (No.{b['nomor']}, Status:{b['status']}): {r_b.status_code} - {r_b.json().get('pesan')}")
 
         # 5. Cek Status Telemetri Terakhir via GET
-        print("\n[5/6] Membaca telemetri terakhir (GET /api/v1/mesin/mesin-01/status) ...")
-        r_status = client.get("/api/v1/mesin/mesin-01/status")
+        print(f"\n[5/6] Membaca telemetri terakhir (GET {api_prefix}/mesin/mesin-01/status) ...")
+        r_status = client.get(f"{api_prefix}/mesin/mesin-01/status")
         print(f"  Status: {r_status.status_code} - Pengguna: {r_status.json().get('pengguna')}, Waktu: {r_status.json().get('waktu')}")
 
         # 6. Cek Ringkasan Produksi via GET
-        print("\n[6/6] Membaca ringkasan produksi (GET /api/v1/mesin/mesin-01/ringkasan) ...")
-        r_ringkasan = client.get("/api/v1/mesin/mesin-01/ringkasan")
+        print(f"\n[6/6] Membaca ringkasan produksi (GET {api_prefix}/mesin/mesin-01/ringkasan) ...")
+        r_ringkasan = client.get(f"{api_prefix}/mesin/mesin-01/ringkasan")
         print(f"  Status: {r_ringkasan.status_code}")
         print(f"  Hasil Ringkasan: {r_ringkasan.json()}")
 

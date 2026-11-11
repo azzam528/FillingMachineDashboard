@@ -17,6 +17,7 @@ TEST_API_KEY = "test-secret-key-12345"
 def test_settings() -> Settings:
     """Settings khusus pengujian."""
     return Settings(
+        ENVIRONMENT="test",
         MONGODB_URI="mongodb://localhost:27017",
         MONGODB_DB_NAME="liquidfilling_test",
         API_KEY=TEST_API_KEY,
@@ -24,6 +25,8 @@ def test_settings() -> Settings:
         PENGGUNA_VALID="gibral,haikal,alvin,naya",
         EVENT_JENIS_ESTOP_TEKAN="estop_tekan",
         EVENT_JENIS_ESTOP_LEPAS="estop_lepas",
+        CORS_ORIGINS="http://localhost:3000,http://localhost:5173,http://127.0.0.1:3000,http://127.0.0.1:5173",
+        API_V1_STR="/api/v1",
     )
 
 
