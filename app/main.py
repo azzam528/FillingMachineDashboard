@@ -141,6 +141,11 @@ def create_app(custom_settings: Optional[Settings] = None) -> FastAPI:
     app_instance.include_router(tulis.router, prefix=api_prefix)
     app_instance.include_router(baca.router, prefix=api_prefix)
 
+    # Dukung juga prefix /api langsung untuk kemudahan akses dan integrasi Live Monitoring Frontend MES
+    if api_prefix != "/api":
+        app_instance.include_router(baca.router, prefix="/api")
+        app_instance.include_router(health.router, prefix="/api")
+
     # Endpoint /health di root juga disediakan untuk kemudahan monitoring & docker healthcheck
     app_instance.include_router(health.router)
 

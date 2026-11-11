@@ -1,8 +1,8 @@
-"""Router untuk endpoint baca: status mesin, telemetri, event, ringkasan (prefix /api/v1)."""
+"""Router untuk endpoint baca: status mesin, telemetri, event, ringkasan (prefix /api/v1 dan /api)."""
 
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 
 from app.auth import verify_read_access
 from app.config import Settings, get_settings
@@ -13,17 +13,58 @@ from app.models import (
     parse_iso8601_utc,
 )
 
-router = APIRouter(prefix="/mesin", tags=["Baca Data"])
+router = APIRouter(prefix="/mesin", tags=["Baca Data & Live Monitoring"])
 
 
 def _serialize_doc(doc: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """Helper untuk mengonversi ObjectId MongoDB ke string dan memastikan serialisasi aman."""
-    if not doc:
+    """Helper rekursif untuk mengonversi BSON types (ObjectId, datetime) ke format JSON standar."""
+    if doc is None:
         return None
-    d = dict(doc)
-    if "_id" in d:
-        d["_id"] = str(d["_id"])
-    return d
+
+    result = {}
+    for key, value in doc.items():
+        if key == "_id":
+            result[key] = str(value)
+        elif isinstance(value, datetime):
+            if value.tzinfo is None:
+                value = value.replace(tzinfo=timezone.utc)
+            iso_str = value.isoformat()
+            if iso_str.endswith("+00:00"):
+                iso_str = iso_str[:-6] + "Z"
+            result[key] = iso_str
+        elif isinstance(value, dict):
+            result[key] = _serialize_doc(value)
+        elif isinstance(value, list):
+            result[key] = [
+                _serialize_doc(item) if isinstance(item, dict)
+                else (
+                    (item.replace(tzinfo=timezone.utc).isoformat()[:-6] + "Z"
+                     if item.tzinfo is None or item.tzinfo.utcoffset(item).total_seconds() == 0
+                     else item.isoformat())
+                    if isinstance(item, datetime)
+                    else item
+                )
+                for item in value
+            ]
+        else:
+            result[key] = value
+    return result
+
+
+@router.get(
+    "",
+    summary="Ambil seluruh daftar mesin yang terdaftar",
+)
+async def daftar_mesin(
+    _: Optional[str] = Depends(verify_read_access),
+):
+    """Membaca seluruh dokumen mesin dari collection 'mesin'."""
+    db = get_db()
+    cursor = db.mesin.find().sort("_id", 1)
+    mesin_list = []
+    async for doc in cursor:
+        mesin_list.append(_serialize_doc(doc))
+    return mesin_list
 
 
 @router.get(
@@ -34,9 +75,10 @@ async def ambil_konfigurasi_mesin(
     id: str,
     _: Optional[str] = Depends(verify_read_access),
 ):
-    """Membaca data konfigurasi mesin dari collection 'mesin'."""
+    """Membaca data konfigurasi fisik mesin dari collection 'mesin'."""
     db = get_db()
-    doc = await db.mesin.find_one({"_id": id})
+    clean_id = id.strip()
+    doc = await db.mesin.find_one({"_id": clean_id})
     if not doc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -47,26 +89,46 @@ async def ambil_konfigurasi_mesin(
 
 @router.get(
     "/{id}/status",
-    summary="Ambil telemetri status terakhir mesin",
+    summary="Ambil telemetri status terakhir mesin untuk Live Monitoring",
 )
 async def ambil_status_terakhir(
     id: str,
-    pengguna: Optional[str] = Query(None, description="Filter berdasarkan pengguna"),
+    pengguna: Optional[str] = Query(None, description="Filter telemetri berdasarkan nama pengguna"),
+    sesi_id: Optional[str] = Query(None, description="Filter telemetri berdasarkan ID sesi"),
     _: Optional[str] = Depends(verify_read_access),
 ):
-    """Membaca 1 data telemetri terakhir (sort waktu descending)."""
+    """Membaca 1 data telemetri terakhir mesin (sort waktu descending).
+
+    Menyediakan data live monitoring terkini mencakup:
+    - mode mesin (Mati, Siap, Berjalan, Darurat)
+    - status darurat (E-stop)
+    - status sakelar MCB (utama, mesin, kontrol, lampu)
+    - sudut putaran turret (derajat)
+    - jumlah botol selesai, isi kotak, sisa peti
+    - status sinyal 8 pin GPIO
+    - tahap dan langkah proses berjalan
+    """
     db = get_db()
-    query: Dict[str, Any] = {"mesin_id": id}
+    clean_id = id.strip()
+    query: Dict[str, Any] = {"mesin_id": clean_id}
+
     if pengguna:
         query["pengguna"] = pengguna.strip().lower()
+    if sesi_id:
+        query["sesi_id"] = sesi_id.strip()
 
+    # Query dokumen telemetri terbaru berdasarkan timestamp waktu pengirim
     doc = await db.telemetri.find_one(
         query,
-        sort=[("waktu", -1)],
+        sort=[("waktu", -1), ("_id", -1)],
     )
     if not doc:
         detail_msg = f"Data telemetri untuk mesin '{id}' belum tersedia"
-        if pengguna:
+        if sesi_id and pengguna:
+            detail_msg += f" untuk sesi '{sesi_id}' dan pengguna '{pengguna}'"
+        elif sesi_id:
+            detail_msg += f" untuk sesi '{sesi_id}'"
+        elif pengguna:
             detail_msg += f" untuk pengguna '{pengguna}'"
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -331,28 +393,53 @@ async def ambil_ringkasan_produksi(
 
 @router.get(
     "/{id}/event",
-    summary="Ambil riwayat event mesin",
+    summary="Ambil riwayat event mesin untuk monitoring",
 )
 async def ambil_riwayat_event(
     id: str,
-    jenis: Optional[str] = Query(None, description="Filter nama jenis event"),
+    response: Response,
+    jenis: Optional[str] = Query(None, description="Filter nama jenis event (tunggal atau koma dipisahkan)"),
     dari: Optional[str] = Query(None, description="Awal rentang waktu (ISO 8601 UTC)"),
     sampai: Optional[str] = Query(None, description="Akhir rentang waktu (ISO 8601 UTC)"),
     sesi_id: Optional[str] = Query(None, description="Filter berdasarkan sesi_id"),
     pengguna: Optional[str] = Query(None, description="Filter berdasarkan pengguna"),
-    limit: int = Query(100, ge=1, le=1000, description="Jumlah data maksimal (1–1000, default 100)"),
+    sumber: Optional[str] = Query(None, description="Filter berdasarkan sumber kejadian (pemain/sistem/operator/esp32)"),
+    mode: Optional[str] = Query(None, description="Filter berdasarkan mode mesin sebelum atau sesudah"),
+    page: Optional[int] = Query(None, ge=1, description="Nomor halaman pagination (mulai dari 1)"),
+    skip: int = Query(0, ge=0, description="Jumlah data yang dilewati (skip)"),
+    limit: int = Query(100, ge=1, le=1000, description="Jumlah data maksimal per halaman (1–1000, default 100)"),
+    wrap: bool = Query(False, description="Jika true, mengembalikan response dibungkus metadata pagination"),
     _: Optional[str] = Depends(verify_read_access),
 ):
-    """Membaca daftar event mesin, terurut dari yang terbaru (waktu descending)."""
+    """Membaca daftar event mesin, terurut dari yang terbaru (waktu descending).
+
+    Mendukung pagination, filter multi-kriteria (jenis, sesi_id, pengguna, sumber, mode, rentang waktu),
+    serta menyertakan response header pagination (X-Total-Count, X-Page, X-Total-Pages, dll.).
+    """
     db = get_db()
-    query: Dict[str, Any] = {"mesin_id": id}
+    clean_id = id.strip()
+    query: Dict[str, Any] = {"mesin_id": clean_id}
 
     if jenis:
-        query["jenis"] = jenis
+        clean_jenis = jenis.strip()
+        if "," in clean_jenis:
+            items = [j.strip() for j in clean_jenis.split(",") if j.strip()]
+            query["jenis"] = {"$in": items}
+        else:
+            query["jenis"] = clean_jenis
+
     if sesi_id:
-        query["sesi_id"] = sesi_id
+        query["sesi_id"] = sesi_id.strip()
+
     if pengguna:
         query["pengguna"] = pengguna.strip().lower()
+
+    if sumber:
+        query["sumber"] = sumber.strip().lower()
+
+    if mode:
+        clean_mode = mode.strip()
+        query["$or"] = [{"mode_sebelum": clean_mode}, {"mode_sesudah": clean_mode}]
 
     try:
         dt_dari = parse_iso8601_utc(dari) if dari else None
@@ -377,9 +464,39 @@ async def ambil_riwayat_event(
             time_filter["$lte"] = dt_sampai
         query["waktu"] = time_filter
 
-    cursor = db.event.find(query).sort("waktu", -1).limit(limit)
+    effective_skip = (page - 1) * limit if page is not None else skip
+
+    # Query MongoDB dengan compound index {mesin_id: 1, waktu: -1}
+    cursor = (
+        db.event.find(query)
+        .sort([("waktu", -1), ("_id", -1)])
+        .skip(effective_skip)
+        .limit(limit)
+    )
+
     events = []
     async for doc in cursor:
         events.append(_serialize_doc(doc))
+
+    # Hitung total dokumen yang cocok untuk header dan metadata pagination
+    total_count = await db.event.count_documents(query)
+    current_page = page if page is not None else ((effective_skip // limit) + 1)
+    total_pages = (total_count + limit - 1) // limit if total_count > 0 else 0
+
+    response.headers["X-Total-Count"] = str(total_count)
+    response.headers["X-Limit"] = str(limit)
+    response.headers["X-Skip"] = str(effective_skip)
+    response.headers["X-Page"] = str(current_page)
+    response.headers["X-Total-Pages"] = str(total_pages)
+
+    if wrap:
+        return {
+            "total": total_count,
+            "page": current_page,
+            "limit": limit,
+            "skip": effective_skip,
+            "total_pages": total_pages,
+            "items": events,
+        }
 
     return events
