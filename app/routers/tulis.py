@@ -1,7 +1,7 @@
-"""Router untuk endpoint tulis: telemetri, event, botol (prefix /api/v1)."""
+"""Router untuk endpoint tulis: telemetri, event, botol (prefix /api)."""
 
 from datetime import datetime, timezone
-from typing import List
+from typing import List, Union
 from fastapi import APIRouter, Depends, HTTPException, status
 from pymongo.errors import DuplicateKeyError
 from motor.motor_asyncio import AsyncIOMotorDatabase
@@ -17,6 +17,29 @@ from app.models import (
 )
 
 router = APIRouter(tags=["Tulis Data"], dependencies=[Depends(verify_write_api_key)])
+
+
+async def _simpan_single(collection, item: Union[EventCreate, BotolCreate], nama: str) -> WriteSingleResponse:
+    """Helper sederhana untuk menyimpan dokumen tunggal dengan idempotensi id_kirim."""
+    doc = item.model_dump()
+    doc["diterima"] = datetime.now(timezone.utc)
+    try:
+        res = await collection.insert_one(doc)
+        return WriteSingleResponse(
+            status="sukses",
+            pesan=f"{nama} berhasil disimpan",
+            id_kirim=item.id_kirim,
+            tersimpan=True,
+            id=str(res.inserted_id),
+        )
+    except DuplicateKeyError:
+        return WriteSingleResponse(
+            status="sukses",
+            pesan="duplikat diabaikan",
+            id_kirim=item.id_kirim,
+            tersimpan=False,
+            id=None,
+        )
 
 
 @router.post(
@@ -67,7 +90,7 @@ async def simpan_telemetri(
             {"id_kirim": 1},
         )
         async for doc in cursor:
-            if "id_kirim" in doc and doc["id_kirim"]:
+            if doc.get("id_kirim"):
                 existing_id_kirim.add(doc["id_kirim"])
 
     # Filter dokumen yang belum ada id_kirim-nya
@@ -105,29 +128,7 @@ async def simpan_event(
     - Idempotent: jika id_kirim sudah ada (DuplicateKeyError), tangkap dan balas 201 'duplikat diabaikan'.
     """
     await verify_mesin_exists(event.mesin_id, db=db)
-
-    server_now = datetime.now(timezone.utc)
-    doc = event.model_dump()
-    doc["diterima"] = server_now
-
-    try:
-        result = await db.event.insert_one(doc)
-        return WriteSingleResponse(
-            status="sukses",
-            pesan="event berhasil disimpan",
-            id_kirim=event.id_kirim,
-            tersimpan=True,
-            id=str(result.inserted_id),
-        )
-    except DuplicateKeyError:
-        # Idempotent response saat id_kirim sudah ada
-        return WriteSingleResponse(
-            status="sukses",
-            pesan="duplikat diabaikan",
-            id_kirim=event.id_kirim,
-            tersimpan=False,
-            id=None,
-        )
+    return await _simpan_single(db.event, event, "event")
 
 
 @router.post(
@@ -147,26 +148,4 @@ async def simpan_botol(
     - Idempotent: jika id_kirim sudah ada (DuplicateKeyError), tangkap dan balas 201 'duplikat diabaikan'.
     """
     await verify_mesin_exists(botol.mesin_id, db=db)
-
-    server_now = datetime.now(timezone.utc)
-    doc = botol.model_dump()
-    doc["diterima"] = server_now
-
-    try:
-        result = await db.botol.insert_one(doc)
-        return WriteSingleResponse(
-            status="sukses",
-            pesan="botol berhasil disimpan",
-            id_kirim=botol.id_kirim,
-            tersimpan=True,
-            id=str(result.inserted_id),
-        )
-    except DuplicateKeyError:
-        # Idempotent response saat id_kirim sudah ada
-        return WriteSingleResponse(
-            status="sukses",
-            pesan="duplikat diabaikan",
-            id_kirim=botol.id_kirim,
-            tersimpan=False,
-            id=None,
-        )
+    return await _simpan_single(db.botol, botol, "botol")

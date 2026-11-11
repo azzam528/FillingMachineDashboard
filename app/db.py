@@ -7,9 +7,11 @@ from app.config import get_settings
 
 logger = logging.getLogger("app.db")
 
+
 class Database:
     client: Optional[AsyncIOMotorClient] = None
     db: Optional[AsyncIOMotorDatabase] = None
+
 
 db_instance = Database()
 
@@ -18,7 +20,7 @@ async def connect_to_db() -> None:
     """Inisialisasi client MongoDB saat startup aplikasi."""
     settings = get_settings()
     logger.info("Menghubungkan ke MongoDB Atlas (nama database: %s)...", settings.MONGODB_DB_NAME)
-    
+
     # Catatan keamanan: MONGODB_URI tidak dicetak ke log
     db_instance.client = AsyncIOMotorClient(
         settings.MONGODB_URI,
@@ -26,8 +28,7 @@ async def connect_to_db() -> None:
         connectTimeoutMS=5000,
     )
     db_instance.db = db_instance.client[settings.MONGODB_DB_NAME]
-    
-    # Verifikasi koneksi sekali saat startup
+
     try:
         await db_instance.client.admin.command("ping")
         logger.info("Berhasil terhubung ke MongoDB Atlas.")
@@ -50,10 +51,3 @@ def get_db() -> AsyncIOMotorDatabase:
     if db_instance.db is None:
         raise RuntimeError("Database belum diinisialisasi atau koneksi belum dibuka.")
     return db_instance.db
-
-
-def get_client() -> AsyncIOMotorClient:
-    """Mendapatkan client MongoDB aktif."""
-    if db_instance.client is None:
-        raise RuntimeError("Client MongoDB belum diinisialisasi.")
-    return db_instance.client

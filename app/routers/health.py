@@ -1,4 +1,4 @@
-"""Router untuk endpoint health check (GET /health dan GET /api/v1/health)."""
+"""Router untuk endpoint health check (GET /health dan GET /api/health)."""
 
 from datetime import datetime, timezone
 from fastapi import APIRouter, Response, status
@@ -33,7 +33,6 @@ async def health_check(response: Response):
             status="ok",
             database="terhubung",
             waktu=now_iso,
-            detail=None,
         )
     except Exception as e:
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
@@ -43,4 +42,3 @@ async def health_check(response: Response):
             waktu=now_iso,
             detail=str(e),
         )
-
