@@ -110,13 +110,34 @@ def create_app(custom_settings: Optional[Settings] = None) -> FastAPI:
     """Factory function untuk inisialisasi aplikasi FastAPI dengan konfigurasi."""
     current_settings = custom_settings or get_settings()
 
+    openapi_tags = [
+        {
+            "name": "Health",
+            "description": "Pemeriksaan kesehatan server dan status konektivitas database MongoDB Atlas.",
+        },
+        {
+            "name": "Tulis Data",
+            "description": "Endpoint ingest data telemetri batch (1-10 data), event mesin, dan botol selesai dari Unity / ESP32 (Header X-Api-Key wajib).",
+        },
+        {
+            "name": "Live Monitoring & Konfigurasi Mesin",
+            "description": "Endpoint pembacaan status operasional real-time mesin, status MCB, sudut turret, GPIO, dan riwayat event.",
+        },
+        {
+            "name": "Analitik MES & Laporan",
+            "description": "Endpoint agregasi produksi, kualitas (OK vs gagal & kategori defect), downtime (E-stop), traceability botol, dan laporan terpadu.",
+        },
+    ]
+
     app_instance = FastAPI(
-        title="Liquid Filling Machine REST API",
+        title="MES Liquid Filling Machine Backend API",
         description=(
-            "REST API perantara antara digital twin Unity dan MongoDB Atlas "
-            "untuk sistem pencatatan data mesin pengisi botol rotary 10 slot."
+            "REST API perantara berperforma tinggi antara digital twin Unity dan MongoDB Atlas, "
+            "serta backend analitik terpadu untuk Manufacturing Execution System (MES) Frontend. "
+            "Mendukung Live Monitoring, Produksi, Kualitas, Downtime, Traceability, dan Laporan."
         ),
-        version="1.0.0",
+        version="1.2.0",
+        openapi_tags=openapi_tags,
         lifespan=lifespan,
         debug=current_settings.DEBUG,
         servers=[{"url": current_settings.API_BASE_URL, "description": "API Base URL"}] if current_settings.API_BASE_URL else None,
@@ -141,10 +162,11 @@ def create_app(custom_settings: Optional[Settings] = None) -> FastAPI:
     app_instance.include_router(tulis.router, prefix=api_prefix)
     app_instance.include_router(baca.router, prefix=api_prefix)
 
-    # Dukung juga prefix /api langsung untuk kemudahan akses dan integrasi Live Monitoring Frontend MES
+    # Dukung juga prefix /api langsung untuk kemudahan akses dan integrasi Live Monitoring Frontend MES & Unity
     if api_prefix != "/api":
-        app_instance.include_router(baca.router, prefix="/api")
         app_instance.include_router(health.router, prefix="/api")
+        app_instance.include_router(tulis.router, prefix="/api")
+        app_instance.include_router(baca.router, prefix="/api")
 
     # Endpoint /health di root juga disediakan untuk kemudahan monitoring & docker healthcheck
     app_instance.include_router(health.router)

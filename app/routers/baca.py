@@ -19,7 +19,7 @@ from app.models import (
     parse_iso8601_utc,
 )
 
-router = APIRouter(prefix="/mesin", tags=["Baca Data & MES Analytics"])
+router = APIRouter(prefix="/mesin")
 
 
 def _serialize_doc(doc: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -167,6 +167,7 @@ def _hitung_downtime_dan_kejadian(
 @router.get(
     "",
     summary="Ambil seluruh daftar mesin yang terdaftar",
+    tags=["Live Monitoring & Konfigurasi Mesin"],
 )
 async def daftar_mesin(
     _: Optional[str] = Depends(verify_read_access),
@@ -183,6 +184,7 @@ async def daftar_mesin(
 @router.get(
     "/{id}",
     summary="Ambil konfigurasi mesin berdasarkan ID",
+    tags=["Live Monitoring & Konfigurasi Mesin"],
 )
 async def ambil_konfigurasi_mesin(
     id: str,
@@ -203,6 +205,7 @@ async def ambil_konfigurasi_mesin(
 @router.get(
     "/{id}/status",
     summary="Ambil telemetri status terakhir mesin untuk Live Monitoring",
+    tags=["Live Monitoring & Konfigurasi Mesin"],
 )
 async def ambil_status_terakhir(
     id: str,
@@ -244,6 +247,7 @@ async def ambil_status_terakhir(
     "/{id}/ringkasan",
     response_model=RingkasanResponse,
     summary="Ambil ringkasan produksi dan kualitas mesin",
+    tags=["Analitik MES & Laporan"],
 )
 async def ambil_ringkasan_produksi(
     id: str,
@@ -479,6 +483,7 @@ async def ambil_ringkasan_produksi(
 @router.get(
     "/{id}/botol",
     summary="Ambil riwayat botol untuk Traceability dan analisis Kualitas",
+    tags=["Analitik MES & Laporan"],
 )
 async def ambil_daftar_botol(
     id: str,
@@ -582,6 +587,7 @@ async def ambil_daftar_botol(
 @router.get(
     "/{id}/botol/{nomor}",
     summary="Ambil detail traceability 1 botol berdasarkan nomor urut",
+    tags=["Analitik MES & Laporan"],
 )
 async def ambil_detail_botol(
     id: str,
@@ -612,6 +618,7 @@ async def ambil_detail_botol(
     "/{id}/downtime",
     response_model=DowntimeResponse,
     summary="Ambil riwayat kejadian darurat dan analisis downtime mesin",
+    tags=["Analitik MES & Laporan"],
 )
 async def ambil_downtime_mesin(
     id: str,
@@ -686,6 +693,7 @@ async def ambil_downtime_mesin(
     "/{id}/laporan",
     response_model=LaporanResponse,
     summary="Ambil laporan terpadu produksi, kualitas, dan downtime",
+    tags=["Analitik MES & Laporan"],
 )
 async def ambil_laporan_mesin(
     id: str,
@@ -840,6 +848,7 @@ async def ambil_laporan_mesin(
 @router.get(
     "/{id}/event",
     summary="Ambil riwayat event mesin untuk monitoring",
+    tags=["Live Monitoring & Konfigurasi Mesin"],
 )
 async def ambil_riwayat_event(
     id: str,
