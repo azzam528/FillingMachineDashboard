@@ -15,7 +15,7 @@ async def test_cors_preflight_allowed_origin(client):
         "Access-Control-Request-Method": "GET",
         "Access-Control-Request-Headers": "X-Api-Key,Content-Type",
     }
-    response = await client.options("/api/v1/health", headers=headers)
+    response = await client.options("/api/health", headers=headers)
     assert response.status_code == 200
     assert response.headers.get("access-control-allow-origin") == "http://localhost:3000"
     assert response.headers.get("access-control-allow-credentials") == "true"
@@ -25,7 +25,7 @@ async def test_cors_preflight_allowed_origin(client):
 @pytest.mark.asyncio
 async def test_cors_request_allowed_origin(client):
     """Permintaan aktual GET dari origin frontend MES yang diizinkan harus menyertakan header CORS."""
-    response = await client.get("/api/v1/health", headers={"Origin": "http://localhost:5173"})
+    response = await client.get("/api/health", headers={"Origin": "http://localhost:5173"})
     assert response.status_code == 200
     assert response.headers.get("access-control-allow-origin") == "http://localhost:5173"
 
@@ -33,7 +33,7 @@ async def test_cors_request_allowed_origin(client):
 @pytest.mark.asyncio
 async def test_cors_disallowed_origin(client):
     """Permintaan dari origin yang tidak terdaftar tidak boleh mendapatkan header access-control-allow-origin."""
-    response = await client.get("/api/v1/health", headers={"Origin": "http://malicious-website.com"})
+    response = await client.get("/api/health", headers={"Origin": "http://malicious-website.com"})
     assert response.status_code == 200
     assert "access-control-allow-origin" not in response.headers
 

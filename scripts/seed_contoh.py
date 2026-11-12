@@ -25,8 +25,8 @@ def main():
     )
     parser.add_argument(
         "--prefix",
-        default=os.environ.get("API_V1_STR", "/api/v1"),
-        help="Prefix routing API (default: /api/v1)",
+        default=os.environ.get("API_PREFIX", os.environ.get("API_V1_STR", "/api")),
+        help="Prefix routing API (default: /api)",
     )
     parser.add_argument(
         "--api-key",

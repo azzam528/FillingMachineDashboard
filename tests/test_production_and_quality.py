@@ -68,7 +68,7 @@ async def seed_mes_data(client, auth_headers):
     ]
 
     for b in botol_list:
-        res = await client.post("/api/v1/botol", headers=auth_headers, json=b)
+        res = await client.post("/api/botol", headers=auth_headers, json=b)
         assert res.status_code == 201
 
     # 2. Event Downtime E-Stop
@@ -98,7 +98,7 @@ async def seed_mes_data(client, auth_headers):
     ]
 
     for ev in events_list:
-        res = await client.post("/api/v1/event", headers=auth_headers, json=ev)
+        res = await client.post("/api/event", headers=auth_headers, json=ev)
         assert res.status_code == 201
 
 

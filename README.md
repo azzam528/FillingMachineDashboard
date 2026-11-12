@@ -27,7 +27,7 @@ Backend ini mendukung dua kelompok integrasi utama:
 
 - **Batch Telemetri Aman & Cepat**: Ingest batch 1–10 dokumen telemetri per request. Pengiriman di luar rentang (kosong atau >10) ditolak HTTP 400.
 - **Idempotensi Pengiriman**: Penggunaan field unik `id_kirim` pada telemetri, event, dan botol mencegah duplikasi data akibat retry jaringan Unity.
-- **Dukungan Dual Prefix API**: Seluruh endpoint dapat diakses baik melalui prefix versi `/api/v1/...` maupun prefix ringkas `/api/...`.
+- **Prefix Routing API Bersih**: Seluruh endpoint terstandarisasi di bawah prefix ringkas `/api/...` (misal: `/api/telemetri`, `/api/event`, `/api/botol`, `/api/mesin/...`).
 - **CORS Ketat & Fleksibel**: Whitelist origin khusus frontend MES (Next.js, Vite, React) dengan validasi ketat anti-wildcard `*` pada mode produksi.
 - **Validasi Skema Berbahasa Indonesia**: Error validasi bawaan Pydantic v2 (422) diubah menjadi **HTTP 400 Bad Request** dengan pesan jelas dalam Bahasa Indonesia.
 - **Traceability Botol Lengkap**: Penelusuran botol individual berdasarkan nomor urut, durasi siklus detik aktual, stasiun kerja, level isi, dan status tutup.
@@ -47,7 +47,7 @@ Aplikasi membaca konfigurasi dari environment variables atau file `.env`:
 | `API_KEY` | String | *wajib diisi* | Kunci API rahasia untuk otorisasi ingest data. |
 | `REQUIRE_KEY_FOR_READ` | Boolean | `false` | Jika `true`, endpoint GET juga memerlukan `X-Api-Key`. |
 | `CORS_ORIGINS` | String | `http://localhost:3000,...` | Daftar origin yang diizinkan (dipisahkan koma). Dilarang `*` pada `production`. |
-| `API_V1_STR` | String | `/api/v1` | Prefix default API. |
+| `API_PREFIX` | String | `/api` | Prefix default API. |
 | `API_BASE_URL` | String | `""` | URL publik server API untuk dokumentasi Swagger servers. |
 | `PENGGUNA_VALID` | String | `gibral,haikal,alvin,naya`| Daftar operator/pengguna valid (dipisahkan koma). |
 
@@ -60,16 +60,16 @@ Aplikasi membaca konfigurasi dari environment variables atau file `.env`:
 ### 1. Health Check
 | Method | Endpoint | Auth | Deskripsi |
 | :--- | :--- | :--- | :--- |
-| `GET` | `/health`, `/api/health`, `/api/v1/health` | Publik | Cek kesehatan server dan konektivitas MongoDB Atlas (`ping`). |
+| `GET` | `/health`, `/api/health` | Publik | Cek kesehatan server dan konektivitas MongoDB Atlas (`ping`). |
 
 ### 2. Tulis Data (Ingest Unity / Hardware)
 *Wajib menyertakan header:* `X-Api-Key: <API_KEY>`
 
 | Method | Endpoint | Payload | Deskripsi |
 | :--- | :--- | :--- | :--- |
-| `POST` | `/api/v1/telemetri`, `/api/telemetri` | Array `[TelemetriCreate]` (1–10 item) | Simpan data telemetri batch dengan dedup `id_kirim`. |
-| `POST` | `/api/v1/event`, `/api/event` | Object `EventCreate` | Simpan event mesin (*START, STOP, estop_tekan, estop_lepas*). |
-| `POST` | `/api/v1/botol`, `/api/botol` | Object `BotolCreate` | Simpan data hasil inspeksi botol selesai. |
+| `POST` | `/api/telemetri` | Array `[TelemetriCreate]` (1–10 item) | Simpan data telemetri batch dengan dedup `id_kirim`. |
+| `POST` | `/api/event` | Object `EventCreate` | Simpan event mesin (*START, STOP, estop_tekan, estop_lepas*). |
+| `POST` | `/api/botol` | Object `BotolCreate` | Simpan data hasil inspeksi botol selesai. |
 
 ### 3. Live Monitoring & Konfigurasi Mesin
 | Method | Endpoint | Query Params | Deskripsi |
@@ -168,7 +168,7 @@ Frontend MES (Next.js / Vite / React) berkomunikasi dengan backend melalui HTTP 
 
 ### 1. Konfigurasi Base URL
 Gunakan base URL API sesuai lingkungan deployment Anda:
-- Development: `http://localhost:8000/api` (atau `http://localhost:8000/api/v1`)
+- Development: `http://localhost:8000/api`
 - Production: `https://api.fillingmachine.domainkamu.com/api`
 
 ### 2. Pemetaan Modul Halaman Frontend MES

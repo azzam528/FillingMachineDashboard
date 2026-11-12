@@ -1,7 +1,7 @@
 """Pengujian komprehensif endpoint Live Monitoring backend MES:
-- GET /api/mesin/{id} dan GET /api/v1/mesin/{id}
-- GET /api/mesin/{id}/status dan GET /api/v1/mesin/{id}/status
-- GET /api/mesin/{id}/event dan GET /api/v1/mesin/{id}/event
+- GET /api/mesin/{id}
+- GET /api/mesin/{id}/status
+- GET /api/mesin/{id}/event
 """
 
 import pytest
@@ -9,7 +9,7 @@ import pytest
 
 @pytest.mark.asyncio
 async def test_get_konfigurasi_mesin_lengkap(client):
-    """GET /api/mesin/{id} dan /api/v1/mesin/{id} mengembalikan informasi konfigurasi mesin lengkap."""
+    """GET /api/mesin/{id} mengembalikan informasi konfigurasi mesin lengkap."""
     # 1. Akses via prefix /api
     res_api = await client.get("/api/mesin/mesin-01")
     assert res_api.status_code == 200
@@ -28,12 +28,7 @@ async def test_get_konfigurasi_mesin_lengkap(client):
     assert "step" in cfg["pin_gpio"]
     assert "pompa" in cfg["pin_gpio"]
 
-    # 2. Akses via prefix /api/v1
-    res_v1 = await client.get("/api/v1/mesin/mesin-01")
-    assert res_v1.status_code == 200
-    assert res_v1.json()["_id"] == "mesin-01"
-
-    # 3. Mesin tidak ditemukan -> 404
+    # 2. Mesin tidak ditemukan -> 404
     res_404 = await client.get("/api/mesin/mesin-tidak-ada")
     assert res_404.status_code == 404
     assert "tidak ditemukan" in res_404.json()["detail"]
@@ -57,7 +52,7 @@ async def test_live_monitoring_status_telemetri_lengkap(client, auth_headers):
     """
     # Kirim data telemetri pertama (t0)
     await client.post(
-        "/api/v1/telemetri",
+        "/api/telemetri",
         headers=auth_headers,
         json=[
             {
@@ -91,7 +86,7 @@ async def test_live_monitoring_status_telemetri_lengkap(client, auth_headers):
 
     # Kirim data telemetri kedua (t1 - lebih baru, mode Berjalan, MCB lampu aktif, botol bertambah)
     await client.post(
-        "/api/v1/telemetri",
+        "/api/telemetri",
         headers=auth_headers,
         json=[
             {
@@ -207,7 +202,7 @@ async def test_live_monitoring_event_sorting_and_filters(client, auth_headers):
     ]
 
     for ev in events_data:
-        await client.post("/api/v1/event", headers=auth_headers, json=ev)
+        await client.post("/api/event", headers=auth_headers, json=ev)
 
     # 1. Pastikan sorting terbaru lebih dulu (09:20:00)
     res = await client.get("/api/mesin/mesin-01/event")
@@ -260,7 +255,7 @@ async def test_live_monitoring_event_pagination_and_headers(client, auth_headers
     # Kirim 4 event data pengujian
     for i in range(4):
         await client.post(
-            "/api/v1/event",
+            "/api/event",
             headers=auth_headers,
             json={
                 "waktu": f"2026-10-29T11:0{i}:00Z",

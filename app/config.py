@@ -63,12 +63,12 @@ class Settings(BaseSettings):
 
     # Konfigurasi Routing & Base URL API
     API_V1_STR: str = Field(
-        default="/api/v1",
-        description="Prefix routing API v1",
+        default="/api",
+        description="Prefix routing API (default: /api)",
     )
     API_PREFIX: str = Field(
-        default="/api/v1",
-        description="Alias prefix routing API v1",
+        default="/api",
+        description="Alias prefix routing API (default: /api)",
     )
     API_BASE_URL: str = Field(
         default="",
@@ -109,10 +109,16 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def validate_environment_and_cors(self) -> "Settings":
         """Validasi pemisahan lingkungan, CORS, dan URL konfigurasi."""
+        # Migrasi otomatis jika nilai masih menggunakan /api/v1 lama dari .env
+        if self.API_V1_STR == "/api/v1":
+            self.API_V1_STR = "/api"
+        if self.API_PREFIX == "/api/v1":
+            self.API_PREFIX = "/api"
+
         # Sinkronkan API_PREFIX dan API_V1_STR jika salah satunya diatur secara kustom
-        if self.API_PREFIX != "/api/v1" and self.API_V1_STR == "/api/v1":
+        if self.API_PREFIX != "/api" and self.API_V1_STR == "/api":
             self.API_V1_STR = self.API_PREFIX
-        elif self.API_V1_STR != "/api/v1" and self.API_PREFIX == "/api/v1":
+        elif self.API_V1_STR != "/api" and self.API_PREFIX == "/api":
             self.API_PREFIX = self.API_V1_STR
 
         # Di lingkungan production, terapkan aturan keamanan ketat

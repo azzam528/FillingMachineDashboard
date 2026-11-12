@@ -17,7 +17,7 @@ Menguji:
 
 3. Alur End-to-End Siklus Lengkap:
    - Simulasi alur kerja pabrik penuh dari start mesin, rotasi telemetri, insiden e-stop,
-     inspeksi botol, hingga pelaporan di frontend MES melalui prefix /api maupun /api/v1.
+     inspeksi botol, hingga pelaporan di frontend MES melalui prefix /api.
 """
 
 from datetime import datetime, timezone
@@ -35,7 +35,7 @@ async def test_unity_telemetry_ingestion_and_deduplication(client, auth_headers)
     """
     # 1. Tanpa API Key -> 401
     unauth_res = await client.post(
-        "/api/v1/telemetri",
+        "/api/telemetri",
         json=[
             {
                 "waktu": "2026-10-30T08:00:00Z",
@@ -109,7 +109,7 @@ async def test_unity_telemetry_ingestion_and_deduplication(client, auth_headers)
         },
     ]
 
-    res_batch = await client.post("/api/v1/telemetri", headers=auth_headers, json=tele_batch)
+    res_batch = await client.post("/api/telemetri", headers=auth_headers, json=tele_batch)
     assert res_batch.status_code == 201
     data_batch = res_batch.json()
     assert data_batch["status"] == "sukses"
@@ -117,7 +117,7 @@ async def test_unity_telemetry_ingestion_and_deduplication(client, auth_headers)
     assert data_batch["duplikat_diabaikan"] == 0
 
     # 3. Kirim ulang batch yang sama persis (simulasi retry Unity akibat latency jaringan)
-    res_retry = await client.post("/api/v1/telemetri", headers=auth_headers, json=tele_batch)
+    res_retry = await client.post("/api/telemetri", headers=auth_headers, json=tele_batch)
     assert res_retry.status_code == 201
     data_retry = res_retry.json()
     assert data_retry["tersimpan"] == 0
@@ -161,11 +161,11 @@ async def test_unity_telemetry_ingestion_and_deduplication(client, auth_headers)
         }
         for i in range(11)
     ]
-    res_overload = await client.post("/api/v1/telemetri", headers=auth_headers, json=overload_items)
+    res_overload = await client.post("/api/telemetri", headers=auth_headers, json=overload_items)
     assert res_overload.status_code == 400
 
     # 6. Uji batch kosong -> 400
-    res_empty = await client.post("/api/v1/telemetri", headers=auth_headers, json=[])
+    res_empty = await client.post("/api/telemetri", headers=auth_headers, json=[])
     assert res_empty.status_code == 400
 
     # 7. Uji mesin_id tidak terdaftar -> 400
@@ -184,7 +184,7 @@ async def test_unity_telemetry_ingestion_and_deduplication(client, auth_headers)
             "gpio": {},
         }
     ]
-    res_inv_mach = await client.post("/api/v1/telemetri", headers=auth_headers, json=invalid_machine)
+    res_inv_mach = await client.post("/api/telemetri", headers=auth_headers, json=invalid_machine)
     assert res_inv_mach.status_code == 400
     assert "tidak terdaftar" in res_inv_mach.json()["detail"]
 
@@ -208,13 +208,13 @@ async def test_unity_event_and_bottle_ingestion_idempotency(client, auth_headers
         "id_kirim": "ev-u-start-01",
         "pesan": "Mesin dijalankan oleh operator Haikal",
     }
-    res_ev = await client.post("/api/v1/event", headers=auth_headers, json=ev_start)
+    res_ev = await client.post("/api/event", headers=auth_headers, json=ev_start)
     assert res_ev.status_code == 201
     assert res_ev.json()["tersimpan"] is True
     assert res_ev.json()["id_kirim"] == "ev-u-start-01"
 
     # Kirim ulang event yang sama -> respons idempotent (tersimpan: False, pesan: duplikat diabaikan)
-    res_ev_dup = await client.post("/api/v1/event", headers=auth_headers, json=ev_start)
+    res_ev_dup = await client.post("/api/event", headers=auth_headers, json=ev_start)
     assert res_ev_dup.status_code == 201
     assert res_ev_dup.json()["tersimpan"] is False
     assert res_ev_dup.json()["pesan"] == "duplikat diabaikan"
@@ -236,12 +236,12 @@ async def test_unity_event_and_bottle_ingestion_idempotency(client, auth_headers
         "bertutup": True,
         "status": "OK",
     }
-    res_b1 = await client.post("/api/v1/botol", headers=auth_headers, json=botol_ok)
+    res_b1 = await client.post("/api/botol", headers=auth_headers, json=botol_ok)
     assert res_b1.status_code == 201
     assert res_b1.json()["tersimpan"] is True
 
     # Kirim ulang botol yang sama -> idempotent
-    res_b1_dup = await client.post("/api/v1/botol", headers=auth_headers, json=botol_ok)
+    res_b1_dup = await client.post("/api/botol", headers=auth_headers, json=botol_ok)
     assert res_b1_dup.status_code == 201
     assert res_b1_dup.json()["tersimpan"] is False
     assert res_b1_dup.json()["pesan"] == "duplikat diabaikan"
@@ -295,7 +295,7 @@ async def test_frontend_mes_monitoring_and_analytics_flow(client, auth_headers):
     # 2. Seed data operasional mesin untuk pengujian alur Frontend MES
     # Telemetri live
     await client.post(
-        "/api/v1/telemetri",
+        "/api/telemetri",
         headers=auth_headers,
         json=[
             {
@@ -339,7 +339,7 @@ async def test_frontend_mes_monitoring_and_analytics_flow(client, auth_headers):
         },
     ]
     for ev in events:
-        await client.post("/api/v1/event", headers=auth_headers, json=ev)
+        await client.post("/api/event", headers=auth_headers, json=ev)
 
     # Botol: 2 OK, 1 TIDAK_PENUH, 1 TANPA_TUTUP
     botol_items = [
@@ -393,7 +393,7 @@ async def test_frontend_mes_monitoring_and_analytics_flow(client, auth_headers):
         },
     ]
     for b in botol_items:
-        await client.post("/api/v1/botol", headers=auth_headers, json=b)
+        await client.post("/api/botol", headers=auth_headers, json=b)
 
     # =========================================================================
     # A. Verifikasi Halaman Live Monitoring Frontend MES
@@ -528,7 +528,7 @@ async def test_end_to_end_full_production_cycle_simulation(client, auth_headers)
     5. Botol selesai dikeluarkan: 1 botol lolos inspeksi (OK), 1 botol cacat (TIDAK_PENUH).
     6. Frontend MES memantau live status: mesin kembali mode Berjalan, darurat=False.
     7. Frontend MES membaca laporan dan ringkasan: data produksi, kualitas, dan downtime tercatat akurat.
-    8. Seluruh endpoint dipastikan identik baik diakses melalui prefix /api maupun /api/v1.
+    8. Prefix lama /api/v1 diverifikasi mengembalikan 404 Not Found.
     """
     sesi = "simulasi-pabrik-2026"
     operator = "naya"
@@ -543,7 +543,7 @@ async def test_end_to_end_full_production_cycle_simulation(client, auth_headers)
         "sumber": "operator",
         "pesan": "Shift pagi dimulai oleh Naya",
     }
-    r = await client.post("/api/v1/event", headers=auth_headers, json=ev_start)
+    r = await client.post("/api/event", headers=auth_headers, json=ev_start)
     assert r.status_code == 201
 
     # Step 2: Telemetri operasional berjalan
@@ -581,7 +581,7 @@ async def test_end_to_end_full_production_cycle_simulation(client, auth_headers)
             "gpio": {"pompa": True},
         },
     ]
-    r = await client.post("/api/v1/telemetri", headers=auth_headers, json=tele_normal)
+    r = await client.post("/api/telemetri", headers=auth_headers, json=tele_normal)
     assert r.status_code == 201
 
     # Step 3: E-Stop ditekan (10:00:15)
@@ -594,7 +594,7 @@ async def test_end_to_end_full_production_cycle_simulation(client, auth_headers)
         "sumber": "pemain",
         "pesan": "Emergency stop ditekan!",
     }
-    r = await client.post("/api/v1/event", headers=auth_headers, json=ev_estop_on)
+    r = await client.post("/api/event", headers=auth_headers, json=ev_estop_on)
     assert r.status_code == 201
 
     tele_darurat = [
@@ -613,7 +613,7 @@ async def test_end_to_end_full_production_cycle_simulation(client, auth_headers)
             "gpio": {},
         }
     ]
-    r = await client.post("/api/v1/telemetri", headers=auth_headers, json=tele_darurat)
+    r = await client.post("/api/telemetri", headers=auth_headers, json=tele_darurat)
     assert r.status_code == 201
 
     # Frontend MES Live Check saat darurat:
@@ -632,7 +632,7 @@ async def test_end_to_end_full_production_cycle_simulation(client, auth_headers)
         "sumber": "pemain",
         "pesan": "Emergency stop dilepas, siap melanjutkan",
     }
-    r = await client.post("/api/v1/event", headers=auth_headers, json=ev_estop_off)
+    r = await client.post("/api/event", headers=auth_headers, json=ev_estop_off)
     assert r.status_code == 201
 
     # Step 5: Mesin kembali normal dan menyelesaikan 2 botol
@@ -666,7 +666,7 @@ async def test_end_to_end_full_production_cycle_simulation(client, auth_headers)
             "gpio": {},
         },
     ]
-    r = await client.post("/api/v1/telemetri", headers=auth_headers, json=tele_recovery)
+    r = await client.post("/api/telemetri", headers=auth_headers, json=tele_recovery)
     assert r.status_code == 201
 
     # Botol 1: OK
@@ -695,8 +695,8 @@ async def test_end_to_end_full_production_cycle_simulation(client, auth_headers)
         "bertutup": True,
         "status": "TIDAK_PENUH",
     }
-    await client.post("/api/v1/botol", headers=auth_headers, json=b1)
-    await client.post("/api/v1/botol", headers=auth_headers, json=b2)
+    await client.post("/api/botol", headers=auth_headers, json=b1)
+    await client.post("/api/botol", headers=auth_headers, json=b2)
 
     # Step 6: Frontend MES memverifikasi pemulihan status
     st_recovered = await client.get("/api/mesin/mesin-01/status")
@@ -717,7 +717,6 @@ async def test_end_to_end_full_production_cycle_simulation(client, auth_headers)
     assert lap["downtime"]["total_durasi_detik"] == 20.0
     assert lap["downtime"]["jumlah_kejadian"] == 1
 
-    # Step 8: Verifikasi konsistensi akses via /api/v1 dan /api
+    # Step 8: Verifikasi bahwa prefix lama /api/v1 sudah tidak aktif (mengembalikan 404)
     lap_v1_res = await client.get(f"/api/v1/mesin/mesin-01/laporan?sesi_id={sesi}")
-    assert lap_v1_res.status_code == 200
-    assert lap_v1_res.json() == lap
+    assert lap_v1_res.status_code == 404

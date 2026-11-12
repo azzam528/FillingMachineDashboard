@@ -156,17 +156,11 @@ def create_app(custom_settings: Optional[Settings] = None) -> FastAPI:
     # Registrasi exception handler validasi Pydantic
     app_instance.add_exception_handler(RequestValidationError, validation_exception_handler)
 
-    # Registrasi router dengan prefix dinamis dari konfigurasi (default /api/v1)
+    # Registrasi router dengan prefix dinamis dari konfigurasi (default /api)
     api_prefix = current_settings.API_V1_STR.rstrip("/")
     app_instance.include_router(health.router, prefix=api_prefix)
     app_instance.include_router(tulis.router, prefix=api_prefix)
     app_instance.include_router(baca.router, prefix=api_prefix)
-
-    # Dukung juga prefix /api langsung untuk kemudahan akses dan integrasi Live Monitoring Frontend MES & Unity
-    if api_prefix != "/api":
-        app_instance.include_router(health.router, prefix="/api")
-        app_instance.include_router(tulis.router, prefix="/api")
-        app_instance.include_router(baca.router, prefix="/api")
 
     # Endpoint /health di root juga disediakan untuk kemudahan monitoring & docker healthcheck
     app_instance.include_router(health.router)

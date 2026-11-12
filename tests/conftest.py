@@ -26,7 +26,7 @@ def test_settings() -> Settings:
         EVENT_JENIS_ESTOP_TEKAN="estop_tekan",
         EVENT_JENIS_ESTOP_LEPAS="estop_lepas",
         CORS_ORIGINS="http://localhost:3000,http://localhost:5173,http://127.0.0.1:3000,http://127.0.0.1:5173",
-        API_V1_STR="/api/v1",
+        API_V1_STR="/api",
     )
 
 

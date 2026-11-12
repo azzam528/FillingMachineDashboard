@@ -1,4 +1,4 @@
-"""Router untuk endpoint baca: status mesin, telemetri, event, ringkasan, botol, downtime, dan laporan (prefix /api/v1 dan /api)."""
+"""Router untuk endpoint baca: status mesin, telemetri, event, ringkasan, botol, downtime, dan laporan (prefix /api)."""
 
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
