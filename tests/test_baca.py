@@ -265,3 +265,167 @@ async def test_durasi_estop_aktif_tanpa_lepas(client, auth_headers):
     )
     assert res.status_code == 200
     assert res.json()["total_durasi_darurat_detik"] == 45.0
+
+
+@pytest.mark.asyncio
+async def test_get_oee_dan_batch_endpoints(client, auth_headers):
+    """Pengujian endpoint GET /oee, GET /batch, dan GET /batch/{batch_ke}."""
+    # Simpan batch contoh
+    payload_batch = {
+        "mesin_id": "mesin-01",
+        "sesi_id": "sesi-oee-1",
+        "pengguna": "gibral",
+        "id_kirim": "batch-oee-01",
+        "batch_ke": 1,
+        "waktu_mulai": "2026-10-29T12:00:00Z",
+        "waktu_selesai": "2026-10-29T12:04:00Z",
+        "target_qty": 30,
+        "botol_selesai": 30,
+        "botol_ok": 27,
+        "botol_reject": 3,
+        "planned_production_time": 240.0,
+        "downtime_unplanned": 20.0,
+        "setup_time": 15.0,
+        "starvation_downtime": 5.0,
+        "packaging_time": 50.0,
+    }
+    res_post = await client.post("/api/batch", headers=auth_headers, json=payload_batch)
+    assert res_post.status_code == 201
+
+    # 1. GET /oee
+    res_oee = await client.get("/api/mesin/mesin-01/oee?batch_ke=1")
+    assert res_oee.status_code == 200
+    d_oee = res_oee.json()
+    assert d_oee["availability_pct"] == 62.50
+    assert d_oee["performance_pct"] == 82.00
+    assert d_oee["quality_pct"] == 90.00
+    assert d_oee["oee_pct"] == 46.13
+    assert d_oee["operating_time_detik"] == 150.0
+    assert "losses" in d_oee
+
+    # 2. GET /batch list
+    res_batches = await client.get("/api/mesin/mesin-01/batch")
+    assert res_batches.status_code == 200
+    items = res_batches.json()
+    assert len(items) >= 1
+    assert items[0]["batch_ke"] == 1
+
+    # 3. GET /batch/{batch_ke}
+    res_b1 = await client.get("/api/mesin/mesin-01/batch/1")
+    assert res_b1.status_code == 200
+    assert res_b1.json()["batch_ke"] == 1
+
+    # 4. GET /batch/999 -> 404
+    res_b404 = await client.get("/api/mesin/mesin-01/batch/999")
+    assert res_b404.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_get_wip_dan_inventori(client, auth_headers):
+    """Pengujian endpoint GET /wip dan GET /inventori."""
+    # Post telemetri dengan data WIP dan inventori
+    payload_tel = [
+        {
+            "waktu": "2026-10-29T12:30:00Z",
+            "mesin_id": "mesin-01",
+            "sesi_id": "sesi-wip-1",
+            "pengguna": "naya",
+            "sisa_peti": 18,
+            "wip_turret": 6,
+            "isi_kotak": 5,
+            "isi_kotak_reject": 1,
+            "sisa_stok_rak_atas": 80,
+            "kapasitas_stok_rak_atas": 100,
+            "jumlah_restock": 2,
+            "jumlah_auto_replenish_rak": 4,
+        }
+    ]
+    res_tel = await client.post("/api/telemetri", headers=auth_headers, json=payload_tel)
+    assert res_tel.status_code == 201
+
+    # 1. GET /wip
+    res_wip = await client.get("/api/mesin/mesin-01/wip")
+    assert res_wip.status_code == 200
+    d_wip = res_wip.json()
+    assert d_wip["wip_total"] == 29
+    assert d_wip["sisa_peti"] == 18
+    assert d_wip["wip_turret"] == 6
+    assert d_wip["isi_kotak"] == 5
+    assert d_wip["warning"] is False
+
+    # 2. GET /inventori
+    res_inv = await client.get("/api/mesin/mesin-01/inventori")
+    assert res_inv.status_code == 200
+    d_inv = res_inv.json()
+    assert d_inv["sisa_stok_rak_atas"] == 80
+    assert d_inv["persentase_stok"] == 80.0
+    assert d_inv["butuh_restock"] is False
+
+
+@pytest.mark.asyncio
+async def test_get_kualitas_lead_time_reliability_kapasitas(client, auth_headers):
+    """Pengujian endpoint GET /kualitas, GET /lead-time, GET /reliability, dan GET /kapasitas."""
+    # Simpan botol
+    b1 = {
+        "mesin_id": "mesin-01",
+        "sesi_id": "sesi-kpi-1",
+        "pengguna": "haikal",
+        "nomor": 10,
+        "slot": 1,
+        "waktu_masuk": "2026-10-29T13:00:00Z",
+        "waktu_isi_mulai": "2026-10-29T13:00:02Z",
+        "waktu_isi_selesai": "2026-10-29T13:00:06Z",
+        "waktu_tutup": "2026-10-29T13:00:08Z",
+        "waktu_keluar": "2026-10-29T13:00:10Z",
+        "level_isi": 0.90,
+        "bertutup": True,
+        "status": "OK",
+    }
+    b2 = {
+        "mesin_id": "mesin-01",
+        "sesi_id": "sesi-kpi-1",
+        "pengguna": "haikal",
+        "nomor": 11,
+        "slot": 2,
+        "waktu_masuk": "2026-10-29T13:00:10Z",
+        "waktu_isi_mulai": "2026-10-29T13:00:12Z",
+        "waktu_isi_selesai": "2026-10-29T13:00:15Z",
+        "waktu_tutup": "2026-10-29T13:00:18Z",
+        "waktu_keluar": "2026-10-29T13:00:20Z",
+        "level_isi": 0.70,
+        "bertutup": True,
+        "status": "TIDAK_PENUH",
+    }
+    await client.post("/api/botol", headers=auth_headers, json=b1)
+    await client.post("/api/botol", headers=auth_headers, json=b2)
+
+    # 1. GET /kualitas
+    res_kual = await client.get("/api/mesin/mesin-01/kualitas?sesi_id=sesi-kpi-1")
+    assert res_kual.status_code == 200
+    d_kual = res_kual.json()
+    assert d_kual["total_botol"] == 2
+    assert d_kual["botol_ok"] == 1
+    assert d_kual["botol_reject"] == 1
+    assert d_kual["first_pass_yield_pct"] == 50.0
+    assert d_kual["pareto_reject"]["TIDAK_PENUH"] == 1
+    assert d_kual["level_isi_stats"]["count"] == 2
+
+    # 2. GET /lead-time
+    res_lt = await client.get("/api/mesin/mesin-01/lead-time?sesi_id=sesi-kpi-1")
+    assert res_lt.status_code == 200
+    d_lt = res_lt.json()
+    assert d_lt["total_botol_dianalisis"] == 2
+    assert d_lt["unit_mlt_avg_detik"] == 10.0
+
+    # 3. GET /reliability
+    res_rel = await client.get("/api/mesin/mesin-01/reliability")
+    assert res_rel.status_code == 200
+    assert "mtbf_detik" in res_rel.json()
+
+    # 4. GET /kapasitas
+    res_kap = await client.get("/api/mesin/mesin-01/kapasitas")
+    assert res_kap.status_code == 200
+    d_kap = res_kap.json()
+    assert d_kap["kapasitas_teoritis_per_jam"] == 878.05
+    assert d_kap["ideal_cycle_time"] == 4.1
+

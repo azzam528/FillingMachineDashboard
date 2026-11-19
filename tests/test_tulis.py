@@ -148,6 +148,115 @@ async def test_post_botol_valid_dan_dedup(client, auth_headers, test_db):
     # 2. Kirim ulang dengan id_kirim yang sama -> 201 duplikat diabaikan (idempotent)
     res2 = await client.post("/api/botol", headers=auth_headers, json=payload)
     assert res2.status_code == 201
-    data2 = res2.json()
-    assert data2["tersimpan"] is False
-    assert data2["pesan"] == "duplikat diabaikan"
+    assert res2.json()["tersimpan"] is False
+    assert res2.json()["pesan"] == "duplikat diabaikan"
+
+
+@pytest.mark.asyncio
+async def test_post_botol_auto_calculate_durations(client, auth_headers, test_db):
+    """durasi_isi_detik dan unit_mlt_detik dihitung otomatis oleh server jika tidak dikirim."""
+    payload = {
+        "mesin_id": "mesin-01",
+        "sesi_id": "alvin-sesi-1",
+        "pengguna": "alvin",
+        "id_kirim": "btl-auto-calc-1",
+        "nomor": 2,
+        "slot": 4,
+        "waktu_masuk": "2026-10-29T10:00:00Z",
+        "waktu_isi_mulai": "2026-10-29T10:00:02Z",
+        "waktu_isi_selesai": "2026-10-29T10:00:07Z",
+        "waktu_tutup": "2026-10-29T10:00:10Z",
+        "waktu_keluar": "2026-10-29T10:00:15Z",
+        "level_isi": 0.95,
+        "bertutup": True,
+        "status": "OK",
+    }
+    res = await client.post("/api/botol", headers=auth_headers, json=payload)
+    assert res.status_code == 201
+
+    doc = await test_db.botol.find_one({"id_kirim": "btl-auto-calc-1"})
+    assert doc is not None
+    # 10:00:07 - 10:00:02 = 5.0 detik
+    assert doc["durasi_isi_detik"] == 5.0
+    # 10:00:15 - 10:00:00 = 15.0 detik
+    assert doc["unit_mlt_detik"] == 15.0
+
+
+@pytest.mark.asyncio
+async def test_post_batch_valid_dan_dedup(client, auth_headers, test_db):
+    """Menyimpan ringkasan batch produksi dan verifikasi perhitungan KPI dan idempotensi."""
+    payload = {
+        "mesin_id": "mesin-01",
+        "sesi_id": "gibral-batch-sesi-1",
+        "pengguna": "gibral",
+        "id_kirim": "batch-kirim-001",
+        "batch_ke": 1,
+        "waktu_mulai": "2026-10-29T10:00:00Z",
+        "waktu_selesai": "2026-10-29T10:04:00Z",
+        "target_qty": 30,
+        "botol_selesai": 30,
+        "botol_ok": 27,
+        "botol_reject": 3,
+        "planned_production_time": 240.0,
+        "downtime_unplanned": 20.0,
+        "setup_time": 15.0,
+        "starvation_downtime": 5.0,
+        "packaging_time": 50.0,
+        "availability_pct": 62.50,
+        "performance_pct": 82.00,
+        "quality_pct": 90.00,
+        "oee_pct": 46.13,
+    }
+    # 1. Kirim pertama -> 201 tersimpan
+    res1 = await client.post("/api/batch", headers=auth_headers, json=payload)
+    assert res1.status_code == 201
+    assert res1.json()["tersimpan"] is True
+
+    doc = await test_db.batch.find_one({"id_kirim": "batch-kirim-001"})
+    assert doc is not None
+    assert doc["production_time"] == 150.0
+    assert doc["availability_pct"] == 62.50
+    assert doc["performance_pct"] == 82.00
+    assert doc["quality_pct"] == 90.00
+    assert doc["oee_pct"] == 46.13
+    assert doc["kpi_mismatch"] is False
+    assert doc["availability_pct_unity"] == 62.50
+
+    # 2. Kirim ulang -> 201 duplikat diabaikan
+    res2 = await client.post("/api/batch", headers=auth_headers, json=payload)
+    assert res2.status_code == 201
+    assert res2.json()["tersimpan"] is False
+    assert res2.json()["pesan"] == "duplikat diabaikan"
+
+
+@pytest.mark.asyncio
+async def test_post_batch_kpi_mismatch_flag(client, auth_headers, test_db):
+    """Batch dengan selisih OEE > 0.5% point diberi flag kpi_mismatch: true tanpa ditolak."""
+    payload = {
+        "mesin_id": "mesin-01",
+        "sesi_id": "gibral-batch-sesi-2",
+        "pengguna": "gibral",
+        "id_kirim": "batch-mismatch-002",
+        "batch_ke": 2,
+        "waktu_mulai": "2026-10-29T10:10:00Z",
+        "waktu_selesai": "2026-10-29T10:14:00Z",
+        "target_qty": 30,
+        "botol_selesai": 30,
+        "botol_ok": 27,
+        "botol_reject": 3,
+        "planned_production_time": 240.0,
+        "downtime_unplanned": 20.0,
+        "setup_time": 15.0,
+        "starvation_downtime": 5.0,
+        "packaging_time": 50.0,
+        "oee_pct": 55.0,  # Unity kirim 55.0%, hitungan server 46.13% (beda > 0.5%)
+    }
+    res = await client.post("/api/batch", headers=auth_headers, json=payload)
+    assert res.status_code == 201
+    assert res.json()["tersimpan"] is True
+
+    doc = await test_db.batch.find_one({"id_kirim": "batch-mismatch-002"})
+    assert doc is not None
+    assert doc["kpi_mismatch"] is True
+    assert doc["oee_pct"] == 46.13
+    assert doc["oee_pct_unity"] == 55.0

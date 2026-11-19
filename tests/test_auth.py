@@ -81,3 +81,24 @@ async def test_baca_require_key_true(client, test_settings):
     )
     assert res3.status_code == 200
     assert res3.json()["_id"] == "mesin-01"
+
+
+@pytest.mark.asyncio
+async def test_batch_tanpa_api_key(client):
+    """POST /api/batch tanpa X-Api-Key harus mengembalikan 401 Unauthorized."""
+    payload = {
+        "mesin_id": "mesin-01",
+        "sesi_id": "gibral-1",
+        "pengguna": "gibral",
+        "batch_ke": 1,
+        "waktu_mulai": "2026-10-29T10:00:00Z",
+        "waktu_selesai": "2026-10-29T10:04:00Z",
+        "target_qty": 30,
+        "botol_selesai": 30,
+        "botol_ok": 30,
+        "botol_reject": 0,
+        "planned_production_time": 240.0,
+    }
+    response = await client.post("/api/batch", json=payload)
+    assert response.status_code == 401
+

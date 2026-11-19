@@ -1,4 +1,4 @@
-"""Router untuk endpoint tulis: telemetri, event, botol (prefix /api)."""
+"""Router untuk endpoint tulis: telemetri, event, botol, batch (prefix /api)."""
 
 from datetime import datetime, timezone
 from typing import List, Union
@@ -7,8 +7,11 @@ from pymongo.errors import DuplicateKeyError
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.auth import verify_mesin_exists, verify_write_api_key
+from app.config import Settings, get_settings
 from app.db import get_db
+from app.kpi import evaluate_batch_kpis
 from app.models import (
+    BatchCreate,
     BotolCreate,
     EventCreate,
     TelemetriCreate,
@@ -141,11 +144,95 @@ async def simpan_botol(
     botol: BotolCreate,
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
-    """Menerima dan menyimpan 1 dokumen botol saat botol masuk kotak penampung.
+    """Menerima dan menyimpan 1 dokumen botol saat botol keluar stasiun QC / jatuh ke kotak.
 
     - Wajib membawa header X-Api-Key yang valid.
     - mesin_id divalidasi ke collection 'mesin' -> jika tidak ada -> 400.
+    - Perhitungan otomatis durasi_isi_detik dan unit_mlt_detik jika tidak dikirim.
+    - Validasi urutan waktu menaik (waktu_masuk <= isi <= tutup <= keluar).
     - Idempotent: jika id_kirim sudah ada (DuplicateKeyError), tangkap dan balas 201 'duplikat diabaikan'.
     """
     await verify_mesin_exists(botol.mesin_id, db=db)
     return await _simpan_single(db.botol, botol, "botol")
+
+
+@router.post(
+    "/batch",
+    status_code=status.HTTP_201_CREATED,
+    response_model=WriteSingleResponse,
+    summary="Simpan 1 dokumen batch produksi selesai",
+)
+async def simpan_batch(
+    batch: BatchCreate,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    """Menerima dan menyimpan ringkasan batch produksi setelah satu batch selesai dikemas.
+
+    - Wajib membawa header X-Api-Key yang valid.
+    - mesin_id divalidasi ke collection 'mesin' -> jika tidak ada -> 400.
+    - Menghitung ulang KPI batch (Production Time, Availability, Performance, Quality, OEE, Cycle Time).
+    - Menyimpan nilai Unity (*_unity) dan nilai hasil kalkulasi server.
+    - Mengevaluasi kpi_mismatch (true jika selisih nilai > KPI_MISMATCH_TOLERANCE / 0.5 poin persen).
+    - Idempoten: DuplicateKeyError pada id_kirim atau compound key (sesi_id, batch_ke) ditangani dengan sukses 'duplikat diabaikan'.
+    """
+    await verify_mesin_exists(batch.mesin_id, db=db)
+
+    # Evaluasi ulang metrik KPI
+    evaluated = evaluate_batch_kpis(
+        planned_production_time=batch.planned_production_time,
+        downtime_unplanned=batch.downtime_unplanned or 0.0,
+        setup_time=batch.setup_time or 0.0,
+        starvation_downtime=batch.starvation_downtime or 0.0,
+        packaging_time=batch.packaging_time or 0.0,
+        botol_selesai=batch.botol_selesai,
+        botol_ok=batch.botol_ok,
+        ideal_cycle_time=batch.ideal_cycle_time or settings.IDEAL_CYCLE_TIME,
+        mlt_batch=batch.mlt_batch,
+        tolerance_pct=settings.KPI_MISMATCH_TOLERANCE,
+        unity_availability_pct=batch.availability_pct,
+        unity_performance_pct=batch.performance_pct,
+        unity_quality_pct=batch.quality_pct,
+        unity_oee_pct=batch.oee_pct,
+    )
+
+    doc = batch.model_dump()
+    doc["diterima"] = datetime.now(timezone.utc)
+
+    # Arsipkan metrik kiriman Unity jika disediakan
+    if batch.availability_pct is not None:
+        doc["availability_pct_unity"] = batch.availability_pct
+    if batch.performance_pct is not None:
+        doc["performance_pct_unity"] = batch.performance_pct
+    if batch.quality_pct is not None:
+        doc["quality_pct_unity"] = batch.quality_pct
+    if batch.oee_pct is not None:
+        doc["oee_pct_unity"] = batch.oee_pct
+
+    # Timpa dengan nilai hasil verifikasi / perhitungan server
+    doc["production_time"] = evaluated["production_time"]
+    doc["availability_pct"] = evaluated["availability_pct"]
+    doc["performance_pct"] = evaluated["performance_pct"]
+    doc["quality_pct"] = evaluated["quality_pct"]
+    doc["oee_pct"] = evaluated["oee_pct"]
+    doc["actual_cycle_time_avg"] = evaluated["actual_cycle_time_avg"]
+    doc["effective_capacity_per_hour"] = evaluated["effective_capacity_per_hour"]
+    doc["kpi_mismatch"] = evaluated["kpi_mismatch"]
+
+    try:
+        res = await db.batch.insert_one(doc)
+        return WriteSingleResponse(
+            status="sukses",
+            pesan="batch berhasil disimpan",
+            id_kirim=batch.id_kirim,
+            tersimpan=True,
+            id=str(res.inserted_id),
+        )
+    except DuplicateKeyError:
+        return WriteSingleResponse(
+            status="sukses",
+            pesan="duplikat diabaikan",
+            id_kirim=batch.id_kirim,
+            tersimpan=False,
+            id=None,
+        )

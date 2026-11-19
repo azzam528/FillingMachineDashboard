@@ -108,13 +108,48 @@ BOTOL = validator(
     }
 )
 
+BATCH = validator(
+    {
+        "required": [
+            "mesin_id",
+            "sesi_id",
+            "batch_ke",
+            "waktu_mulai",
+            "waktu_selesai",
+            "target_qty",
+            "botol_selesai",
+            "botol_ok",
+            "botol_reject",
+            "planned_production_time",
+        ],
+        "properties": {
+            "mesin_id": {"bsonType": "string"},
+            "sesi_id": {"bsonType": "string"},
+            "batch_ke": {"bsonType": INT, "minimum": 1},
+            "id_kirim": {"bsonType": "string"},
+            "diterima": {"bsonType": "date"},
+            "waktu_mulai": {"bsonType": "date"},
+            "waktu_selesai": {"bsonType": "date"},
+            "target_qty": {"bsonType": INT, "minimum": 0},
+            "botol_selesai": {"bsonType": INT, "minimum": 0},
+            "botol_ok": {"bsonType": INT, "minimum": 0},
+            "botol_reject": {"bsonType": INT, "minimum": 0},
+            "planned_production_time": {"bsonType": NUM, "minimum": 0},
+        },
+    }
+)
+
 MESIN_01 = {
     "nama": "Mesin Pengisi Botol Rotary 10 Slot (Digital Twin)",
     "jumlah_slot": 10,
     "sudut_per_slot_deg": 36,
     "stasiun": {"infeed": 36, "isi": 180, "capping": 144, "buang": 108},
     "kapasitas_kotak": 30,
-    "kapasitas_peti": 12,
+    "kapasitas_kotak_ok": 30,
+    "kapasitas_kotak_reject": 12,
+    "kapasitas_peti": 30,
+    "ideal_cycle_time": 4.1,
+    "batas_lulus_qc": 0.85,
     # Isi nomor pin sebenarnya nanti; None = belum ditetapkan
     "pin_gpio": {
         k: None
@@ -209,6 +244,34 @@ def main() -> int:
             [("mesin_id", ASCENDING), ("sesi_id", ASCENDING)], name="mesin_sesi"
         )
         db.botol.create_index(
+            [("id_kirim", ASCENDING)],
+            name="id_kirim_unik",
+            unique=True,
+            partialFilterExpression={"id_kirim": {"$type": "string"}},
+        )
+
+        # 5. batch
+        buat(
+            db,
+            "batch",
+            validator=BATCH,
+            validationLevel="moderate",
+            validationAction="error",
+        )
+        db.batch.create_index(
+            [("mesin_id", ASCENDING), ("batch_ke", DESCENDING)],
+            name="mesin_batch_ke",
+        )
+        db.batch.create_index(
+            [("mesin_id", ASCENDING), ("waktu_selesai", DESCENDING)],
+            name="mesin_waktu_selesai",
+        )
+        db.batch.create_index(
+            [("sesi_id", ASCENDING), ("batch_ke", ASCENDING)],
+            name="sesi_batch_unik",
+            unique=True,
+        )
+        db.batch.create_index(
             [("id_kirim", ASCENDING)],
             name="id_kirim_unik",
             unique=True,

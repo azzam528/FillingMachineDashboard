@@ -7,15 +7,37 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from app.auth import verify_read_access
 from app.config import Settings, get_settings
 from app.db import get_db
+from app.kpi import (
+    calculate_actual_cycle_time_avg,
+    calculate_availability,
+    calculate_effective_capacity_per_hour,
+    calculate_level_isi_stats,
+    calculate_mtbf,
+    calculate_mttr,
+    calculate_oee,
+    calculate_performance,
+    calculate_production_time,
+    calculate_quality,
+    calculate_six_big_losses,
+    calculate_theoretical_capacity,
+    calculate_wip_total,
+)
 from app.models import (
     DowntimeResponse,
+    InventoriResponse,
+    KapasitasResponse,
     KejadianDowntimeItem,
+    KualitasAnalisisResponse,
     LaporanDowntimeSection,
     LaporanKualitasSection,
     LaporanProduksiSection,
     LaporanResponse,
+    LeadTimeResponse,
+    OEEResponse,
+    ReliabilityResponse,
     RingkasanResponse,
     RingkasanStatistik,
+    WIPResponse,
     parse_iso8601_utc,
 )
 
@@ -951,3 +973,757 @@ async def ambil_riwayat_event(
         }
 
     return events
+
+
+# ============================================================================
+# Endpoint Baru Sesuai Spesifikasi Web MES
+# ============================================================================
+
+@router.get(
+    "/{id}/oee",
+    response_model=OEEResponse,
+    summary="Ambil metrik OEE, Availability, Performance, Quality, dan Six Big Losses",
+    tags=["Analitik MES & Laporan"],
+)
+async def ambil_oee_mesin(
+    id: str,
+    batch_ke: Optional[int] = Query(None, ge=1, description="Nomor batch tertentu"),
+    sesi_id: Optional[str] = Query(None, description="Filter berdasarkan ID sesi"),
+    pengguna: Optional[str] = Query(None, description="Filter berdasarkan nama pengguna"),
+    dari: Optional[str] = Query(None, description="Awal rentang waktu (ISO 8601 UTC)"),
+    sampai: Optional[str] = Query(None, description="Akhir rentang waktu (ISO 8601 UTC)"),
+    _: Optional[str] = Depends(verify_read_access),
+    settings: Settings = Depends(get_settings),
+):
+    """Menghitung metrik OEE, Availability, Performance, Quality, dan rincian Six Big Losses."""
+    db = get_db()
+    clean_id = id.strip()
+
+    # Cek dokumen batch terlebih dahulu
+    query_batch: Dict[str, Any] = {"mesin_id": clean_id}
+    if batch_ke is not None:
+        query_batch["batch_ke"] = batch_ke
+    if sesi_id:
+        query_batch["sesi_id"] = sesi_id.strip()
+    if pengguna:
+        query_batch["pengguna"] = pengguna.strip().lower()
+
+    batch_doc = await db.batch.find_one(query_batch, sort=[("batch_ke", -1), ("waktu_selesai", -1)])
+
+    if batch_doc:
+        planned = float(batch_doc.get("planned_production_time") or 0.0)
+        unplanned = float(batch_doc.get("downtime_unplanned") or 0.0)
+        setup = float(batch_doc.get("setup_time") or 0.0)
+        starvation = float(batch_doc.get("starvation_downtime") or 0.0)
+        packaging = float(batch_doc.get("packaging_time") or 0.0)
+        botol_selesai = int(batch_doc.get("botol_selesai") or 0)
+        botol_ok = int(batch_doc.get("botol_ok") or 0)
+        botol_reject = int(batch_doc.get("botol_reject") or 0)
+        ideal_ct = float(batch_doc.get("ideal_cycle_time") or settings.IDEAL_CYCLE_TIME)
+
+        prod_time = calculate_production_time(planned, unplanned, setup, starvation, packaging)
+        avail = calculate_availability(prod_time, planned)
+        perf = calculate_performance(ideal_ct, botol_selesai, prod_time)
+        qual = calculate_quality(botol_ok, botol_selesai)
+        oee_val = calculate_oee(avail, perf, qual)
+
+        losses = calculate_six_big_losses(
+            downtime_unplanned=unplanned,
+            setup_time=setup,
+            starvation_downtime=starvation,
+            packaging_time=packaging,
+            production_time=prod_time,
+            ideal_cycle_time=ideal_ct,
+            botol_selesai=botol_selesai,
+            botol_reject=botol_reject,
+        )
+
+        return OEEResponse(
+            mesin_id=clean_id,
+            sesi_id=batch_doc.get("sesi_id"),
+            batch_ke=batch_doc.get("batch_ke"),
+            availability=avail,
+            performance=perf,
+            quality=qual,
+            oee=oee_val,
+            availability_pct=round(avail * 100.0, 2),
+            performance_pct=round(perf * 100.0, 2),
+            quality_pct=round(qual * 100.0, 2),
+            oee_pct=round((oee_val * 100.0) + 1e-7, 2),
+            losses=losses,
+            operating_time_detik=prod_time,
+            planned_time_detik=planned,
+            kpi_mismatch=batch_doc.get("kpi_mismatch"),
+        )
+
+    # Fallback jika belum ada batch: periksa telemetri terakhir
+    query_tel: Dict[str, Any] = {"mesin_id": clean_id}
+    if sesi_id:
+        query_tel["sesi_id"] = sesi_id.strip()
+    if pengguna:
+        query_tel["pengguna"] = pengguna.strip().lower()
+
+    tel_doc = await db.telemetri.find_one(query_tel, sort=[("waktu", -1)])
+    if not tel_doc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Data OEE belum tersedia untuk mesin '{id}'",
+        )
+
+    planned = float(tel_doc.get("planned_production_time") or 0.0)
+    unplanned = float(tel_doc.get("downtime_unplanned") or 0.0)
+    setup = float(tel_doc.get("setup_time") or 0.0)
+    starvation = float(tel_doc.get("starvation_downtime") or 0.0)
+    packaging = float(tel_doc.get("packaging_time") or 0.0)
+    botol_selesai = int(tel_doc.get("botol_selesai") or 0)
+    botol_ok = int(tel_doc.get("botol_ok") or 0)
+    botol_reject = int(tel_doc.get("botol_reject") or 0)
+    ideal_ct = float(tel_doc.get("ideal_cycle_time") or settings.IDEAL_CYCLE_TIME)
+
+    prod_time = calculate_production_time(planned, unplanned, setup, starvation, packaging)
+    avail = calculate_availability(prod_time, planned)
+    perf = calculate_performance(ideal_ct, botol_selesai, prod_time)
+    qual = calculate_quality(botol_ok, botol_selesai)
+    oee_val = calculate_oee(avail, perf, qual)
+
+    losses = calculate_six_big_losses(
+        downtime_unplanned=unplanned,
+        setup_time=setup,
+        starvation_downtime=starvation,
+        packaging_time=packaging,
+        production_time=prod_time,
+        ideal_cycle_time=ideal_ct,
+        botol_selesai=botol_selesai,
+        botol_reject=botol_reject,
+    )
+
+    return OEEResponse(
+        mesin_id=clean_id,
+        sesi_id=tel_doc.get("sesi_id"),
+        batch_ke=tel_doc.get("batch_ke"),
+        availability=avail,
+        performance=perf,
+        quality=qual,
+        oee=oee_val,
+        availability_pct=round(avail * 100.0, 2),
+        performance_pct=round(perf * 100.0, 2),
+        quality_pct=round(qual * 100.0, 2),
+        oee_pct=round((oee_val * 100.0) + 1e-7, 2),
+        losses=losses,
+        operating_time_detik=prod_time,
+        planned_time_detik=planned,
+        kpi_mismatch=None,
+    )
+
+
+@router.get(
+    "/{id}/batch",
+    summary="Ambil daftar riwayat batch produksi mesin",
+    tags=["Analitik MES & Laporan"],
+)
+async def ambil_daftar_batch(
+    id: str,
+    response: Response,
+    sesi_id: Optional[str] = Query(None, description="Filter berdasarkan ID sesi"),
+    pengguna: Optional[str] = Query(None, description="Filter berdasarkan pengguna"),
+    dari: Optional[str] = Query(None, description="Awal rentang waktu selesai (ISO 8601 UTC)"),
+    sampai: Optional[str] = Query(None, description="Akhir rentang waktu selesai (ISO 8601 UTC)"),
+    page: Optional[int] = Query(None, ge=1, description="Nomor halaman pagination"),
+    skip: int = Query(0, ge=0, description="Jumlah data dilewati"),
+    limit: int = Query(50, ge=1, le=1000, description="Jumlah data per halaman"),
+    wrap: bool = Query(False, description="Jika true, return objek dengan metadata pagination"),
+    _: Optional[str] = Depends(verify_read_access),
+):
+    """Membaca riwayat batch produksi terurut dari batch terbaru."""
+    db = get_db()
+    clean_id = id.strip()
+    query: Dict[str, Any] = {"mesin_id": clean_id}
+
+    if sesi_id:
+        query["sesi_id"] = sesi_id.strip()
+    if pengguna:
+        query["pengguna"] = pengguna.strip().lower()
+
+    try:
+        dt_dari = parse_iso8601_utc(dari) if dari else None
+        dt_sampai = parse_iso8601_utc(sampai) if sampai else None
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Parameter filter waktu tidak valid: {str(e)}",
+        )
+
+    if dt_dari and dt_sampai and dt_dari > dt_sampai:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Parameter 'dari' tidak boleh lebih besar dari 'sampai'",
+        )
+
+    if dt_dari or dt_sampai:
+        time_filter: Dict[str, Any] = {}
+        if dt_dari:
+            time_filter["$gte"] = dt_dari
+        if dt_sampai:
+            time_filter["$lte"] = dt_sampai
+        query["waktu_selesai"] = time_filter
+
+    effective_skip = (page - 1) * limit if page is not None else skip
+
+    cursor = (
+        db.batch.find(query)
+        .sort([("batch_ke", -1), ("waktu_selesai", -1)])
+        .skip(effective_skip)
+        .limit(limit)
+    )
+
+    items = []
+    async for doc in cursor:
+        items.append(_serialize_doc(doc))
+
+    total_count = await db.batch.count_documents(query)
+    current_page = page if page is not None else ((effective_skip // limit) + 1)
+    total_pages = (total_count + limit - 1) // limit if total_count > 0 else 0
+
+    response.headers["X-Total-Count"] = str(total_count)
+    response.headers["X-Limit"] = str(limit)
+    response.headers["X-Skip"] = str(effective_skip)
+    response.headers["X-Page"] = str(current_page)
+    response.headers["X-Total-Pages"] = str(total_pages)
+
+    if wrap:
+        return {
+            "total": total_count,
+            "page": current_page,
+            "limit": limit,
+            "skip": effective_skip,
+            "total_pages": total_pages,
+            "items": items,
+        }
+
+    return items
+
+
+@router.get(
+    "/{id}/batch/{batch_ke}",
+    summary="Ambil detail 1 batch produksi berdasarkan nomor batch",
+    tags=["Analitik MES & Laporan"],
+)
+async def ambil_detail_batch(
+    id: str,
+    batch_ke: int,
+    sesi_id: Optional[str] = Query(None, description="Filter berdasarkan ID sesi"),
+    _: Optional[str] = Depends(verify_read_access),
+):
+    """Membaca dokumen detail 1 batch produksi."""
+    db = get_db()
+    clean_id = id.strip()
+    query: Dict[str, Any] = {"mesin_id": clean_id, "batch_ke": batch_ke}
+    if sesi_id:
+        query["sesi_id"] = sesi_id.strip()
+
+    doc = await db.batch.find_one(query, sort=[("waktu_selesai", -1)])
+    if not doc:
+        msg = f"Batch nomor {batch_ke} untuk mesin '{id}' tidak ditemukan"
+        if sesi_id:
+            msg += f" pada sesi '{sesi_id}'"
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=msg,
+        )
+    return _serialize_doc(doc)
+
+
+@router.get(
+    "/{id}/wip",
+    response_model=WIPResponse,
+    summary="Ambil status Work-in-Process (WIP) mesin saat ini",
+    tags=["Analitik MES & Laporan"],
+)
+async def ambil_wip_mesin(
+    id: str,
+    sesi_id: Optional[str] = Query(None, description="Filter berdasarkan ID sesi"),
+    _: Optional[str] = Depends(verify_read_access),
+    settings: Settings = Depends(get_settings),
+):
+    """Membaca metrik Work-in-Process (WIP) terkini dari stasiun peti, turret, dan kotak penampung."""
+    db = get_db()
+    clean_id = id.strip()
+
+    mesin_doc = await db.mesin.find_one({"_id": clean_id})
+    kap_peti = (mesin_doc.get("kapasitas_peti") if mesin_doc else None) or 30
+    kap_turret = (mesin_doc.get("jumlah_slot") if mesin_doc else None) or 10
+    kap_kotak = (mesin_doc.get("kapasitas_kotak") if mesin_doc else None) or 30
+    kap_maksimal = kap_peti + kap_turret + kap_kotak
+
+    query: Dict[str, Any] = {"mesin_id": clean_id}
+    if sesi_id:
+        query["sesi_id"] = sesi_id.strip()
+
+    doc = await db.telemetri.find_one(query, sort=[("waktu", -1)])
+    if not doc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Data telemetri untuk evaluasi WIP mesin '{id}' belum tersedia",
+        )
+
+    sisa_peti = int(doc.get("sisa_peti") or 0)
+    wip_turret = int(doc.get("wip_turret") or 0)
+    isi_kotak = int(doc.get("isi_kotak") or 0)
+    isi_kotak_reject = int(doc.get("isi_kotak_reject") or 0)
+    wip_tot = int(doc.get("wip_total") or calculate_wip_total(sisa_peti, wip_turret, isi_kotak))
+
+    warning = wip_tot >= int(kap_maksimal * settings.WIP_WARNING_RATIO)
+    waktu_str = doc.get("waktu").isoformat() if isinstance(doc.get("waktu"), datetime) else str(doc.get("waktu") or "")
+
+    return WIPResponse(
+        mesin_id=clean_id,
+        wip_total=wip_tot,
+        sisa_peti=sisa_peti,
+        wip_turret=wip_turret,
+        isi_kotak=isi_kotak,
+        isi_kotak_reject=isi_kotak_reject,
+        warning=warning,
+        kapasitas_maksimal=kap_maksimal,
+        waktu=waktu_str,
+    )
+
+
+@router.get(
+    "/{id}/kualitas",
+    response_model=KualitasAnalisisResponse,
+    summary="Ambil analisis kualitas, Pareto reject, dan statistik level isi cairan",
+    tags=["Analitik MES & Laporan"],
+)
+async def ambil_analisis_kualitas(
+    id: str,
+    sesi_id: Optional[str] = Query(None, description="Filter berdasarkan ID sesi"),
+    pengguna: Optional[str] = Query(None, description="Filter berdasarkan pengguna"),
+    dari: Optional[str] = Query(None, description="Awal rentang waktu (ISO 8601 UTC)"),
+    sampai: Optional[str] = Query(None, description="Akhir rentang waktu (ISO 8601 UTC)"),
+    batch_ke: Optional[int] = Query(None, ge=1, description="Filter nomor batch"),
+    _: Optional[str] = Depends(verify_read_access),
+    settings: Settings = Depends(get_settings),
+):
+    """Menghitung First Pass Yield, diagram Pareto cacat produk, dan statistik SPC (Mean, UCL, LCL) level isi."""
+    db = get_db()
+    clean_id = id.strip()
+    match_botol: Dict[str, Any] = {"mesin_id": clean_id}
+
+    if sesi_id:
+        match_botol["sesi_id"] = sesi_id.strip()
+    if pengguna:
+        match_botol["pengguna"] = pengguna.strip().lower()
+    if batch_ke is not None:
+        match_botol["batch_ke"] = batch_ke
+
+    try:
+        dt_dari = parse_iso8601_utc(dari) if dari else None
+        dt_sampai = parse_iso8601_utc(sampai) if sampai else None
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Parameter filter waktu tidak valid: {str(e)}",
+        )
+
+    if dt_dari and dt_sampai and dt_dari > dt_sampai:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Parameter 'dari' tidak boleh lebih besar dari 'sampai'",
+        )
+
+    if dt_dari or dt_sampai:
+        time_filter: Dict[str, Any] = {}
+        if dt_dari:
+            time_filter["$gte"] = dt_dari
+        if dt_sampai:
+            time_filter["$lte"] = dt_sampai
+        match_botol["waktu_keluar"] = time_filter
+
+    pipeline = [
+        {"$match": match_botol},
+        {
+            "$group": {
+                "_id": None,
+                "total_botol": {"$sum": 1},
+                "botol_ok": {
+                    "$sum": {"$cond": [{"$eq": ["$status", "OK"]}, 1, 0]}
+                },
+                "botol_reject": {
+                    "$sum": {"$cond": [{"$ne": ["$status", "OK"]}, 1, 0]}
+                },
+                "tidak_penuh": {
+                    "$sum": {"$cond": [{"$eq": ["$status", "TIDAK_PENUH"]}, 1, 0]}
+                },
+                "tanpa_tutup": {
+                    "$sum": {"$cond": [{"$eq": ["$status", "TANPA_TUTUP"]}, 1, 0]}
+                },
+                "levels": {"$push": "$level_isi"},
+            }
+        },
+    ]
+
+    res = await db.botol.aggregate(pipeline).to_list(1)
+    if not res:
+        return KualitasAnalisisResponse(
+            mesin_id=clean_id,
+            total_botol=0,
+            botol_ok=0,
+            botol_reject=0,
+            first_pass_yield_pct=0.0,
+            pareto_reject={},
+            level_isi_stats=calculate_level_isi_stats([], settings.BATAS_LULUS_QC),
+        )
+
+    row = res[0]
+    total_b = int(row.get("total_botol", 0))
+    ok_b = int(row.get("botol_ok", 0))
+    reject_b = int(row.get("botol_reject", 0))
+    tidak_penuh = int(row.get("tidak_penuh", 0))
+    tanpa_tutup = int(row.get("tanpa_tutup", 0))
+    levels = [float(x) for x in row.get("levels", []) if x is not None]
+
+    fpy_pct = round((ok_b / total_b) * 100.0, 2) if total_b > 0 else 0.0
+    pareto = {}
+    if tidak_penuh > 0:
+        pareto["TIDAK_PENUH"] = tidak_penuh
+    if tanpa_tutup > 0:
+        pareto["TANPA_TUTUP"] = tanpa_tutup
+
+    stats = calculate_level_isi_stats(levels, settings.BATAS_LULUS_QC)
+
+    return KualitasAnalisisResponse(
+        mesin_id=clean_id,
+        total_botol=total_b,
+        botol_ok=ok_b,
+        botol_reject=reject_b,
+        first_pass_yield_pct=fpy_pct,
+        pareto_reject=pareto,
+        level_isi_stats=stats,
+    )
+
+
+@router.get(
+    "/{id}/lead-time",
+    response_model=LeadTimeResponse,
+    summary="Ambil metrik Manufacturing Lead Time (MLT) botol dan batch",
+    tags=["Analitik MES & Laporan"],
+)
+async def ambil_lead_time(
+    id: str,
+    sesi_id: Optional[str] = Query(None, description="Filter berdasarkan ID sesi"),
+    pengguna: Optional[str] = Query(None, description="Filter berdasarkan pengguna"),
+    dari: Optional[str] = Query(None, description="Awal rentang waktu (ISO 8601 UTC)"),
+    sampai: Optional[str] = Query(None, description="Akhir rentang waktu (ISO 8601 UTC)"),
+    _: Optional[str] = Depends(verify_read_access),
+):
+    """Menghitung rata-rata Manufacturing Lead Time (MLT) per unit botol dan per batch."""
+    db = get_db()
+    clean_id = id.strip()
+
+    match_botol: Dict[str, Any] = {"mesin_id": clean_id}
+    match_batch: Dict[str, Any] = {"mesin_id": clean_id}
+
+    if sesi_id:
+        match_botol["sesi_id"] = sesi_id.strip()
+        match_batch["sesi_id"] = sesi_id.strip()
+    if pengguna:
+        match_botol["pengguna"] = pengguna.strip().lower()
+        match_batch["pengguna"] = pengguna.strip().lower()
+
+    try:
+        dt_dari = parse_iso8601_utc(dari) if dari else None
+        dt_sampai = parse_iso8601_utc(sampai) if sampai else None
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Parameter filter waktu tidak valid: {str(e)}",
+        )
+
+    if dt_dari and dt_sampai and dt_dari > dt_sampai:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Parameter 'dari' tidak boleh lebih besar dari 'sampai'",
+        )
+
+    if dt_dari or dt_sampai:
+        time_filter: Dict[str, Any] = {}
+        if dt_dari:
+            time_filter["$gte"] = dt_dari
+        if dt_sampai:
+            time_filter["$lte"] = dt_sampai
+        match_botol["waktu_keluar"] = time_filter
+        match_batch["waktu_selesai"] = time_filter
+
+    pipeline_botol = [
+        {"$match": match_botol},
+        {
+            "$project": {
+                "unit_mlt": {
+                    "$cond": [
+                        {"$gt": ["$unit_mlt_detik", 0]},
+                        "$unit_mlt_detik",
+                        {"$divide": [{"$subtract": ["$waktu_keluar", "$waktu_masuk"]}, 1000.0]},
+                    ]
+                },
+                "durasi_isi": {
+                    "$cond": [
+                        {"$gt": ["$durasi_isi_detik", 0]},
+                        "$durasi_isi_detik",
+                        {
+                            "$cond": [
+                                {"$and": ["$waktu_isi_selesai", "$waktu_isi_mulai"]},
+                                {"$divide": [{"$subtract": ["$waktu_isi_selesai", "$waktu_isi_mulai"]}, 1000.0]},
+                                0.0,
+                            ]
+                        },
+                    ]
+                },
+            }
+        },
+        {
+            "$group": {
+                "_id": None,
+                "count": {"$sum": 1},
+                "avg_unit_mlt": {"$avg": "$unit_mlt"},
+                "avg_durasi_isi": {"$avg": "$durasi_isi"},
+            }
+        },
+    ]
+
+    pipeline_batch = [
+        {"$match": match_batch},
+        {
+            "$project": {
+                "batch_mlt": {
+                    "$cond": [
+                        {"$gt": ["$mlt_batch", 0]},
+                        "$mlt_batch",
+                        {"$divide": [{"$subtract": ["$waktu_selesai", "$waktu_mulai"]}, 1000.0]},
+                    ]
+                }
+            }
+        },
+        {
+            "$group": {
+                "_id": None,
+                "count": {"$sum": 1},
+                "avg_batch_mlt": {"$avg": "$batch_mlt"},
+            }
+        },
+    ]
+
+    res_botol = await db.botol.aggregate(pipeline_botol).to_list(1)
+    res_batch = await db.batch.aggregate(pipeline_batch).to_list(1)
+
+    avg_unit_mlt = round(float(res_botol[0].get("avg_unit_mlt") or 0.0), 3) if res_botol else 0.0
+    avg_durasi_isi = round(float(res_botol[0].get("avg_durasi_isi") or 0.0), 3) if res_botol else 0.0
+    tot_botol = int(res_botol[0].get("count") or 0) if res_botol else 0
+
+    avg_batch_mlt = round(float(res_batch[0].get("avg_batch_mlt") or 0.0), 3) if res_batch else 0.0
+    tot_batch = int(res_batch[0].get("count") or 0) if res_batch else 0
+
+    return LeadTimeResponse(
+        mesin_id=clean_id,
+        unit_mlt_avg_detik=avg_unit_mlt,
+        batch_mlt_avg_detik=avg_batch_mlt,
+        durasi_isi_avg_detik=avg_durasi_isi,
+        total_botol_dianalisis=tot_botol,
+        total_batch_dianalisis=tot_batch,
+    )
+
+
+@router.get(
+    "/{id}/reliability",
+    response_model=ReliabilityResponse,
+    summary="Ambil metrik reliabilitas mesin: MTBF, MTTR, dan frekuensi breakdown",
+    tags=["Analitik MES & Laporan"],
+)
+async def ambil_reliabilitas(
+    id: str,
+    sesi_id: Optional[str] = Query(None, description="Filter berdasarkan ID sesi"),
+    pengguna: Optional[str] = Query(None, description="Filter berdasarkan pengguna"),
+    dari: Optional[str] = Query(None, description="Awal rentang waktu (ISO 8601 UTC)"),
+    sampai: Optional[str] = Query(None, description="Akhir rentang waktu (ISO 8601 UTC)"),
+    _: Optional[str] = Depends(verify_read_access),
+    settings: Settings = Depends(get_settings),
+):
+    """Menghitung Mean Time Between Failures (MTBF) dan Mean Time to Repair (MTTR)."""
+    db = get_db()
+    clean_id = id.strip()
+
+    try:
+        dt_dari = parse_iso8601_utc(dari) if dari else None
+        dt_sampai = parse_iso8601_utc(sampai) if sampai else None
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Parameter filter waktu tidak valid: {str(e)}",
+        )
+
+    if dt_dari and dt_sampai and dt_dari > dt_sampai:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Parameter 'dari' tidak boleh lebih besar dari 'sampai'",
+        )
+
+    # 1. Hitung durasi dan jumlah kejadian darurat dari event E-stop
+    estop_tekan_jenis = settings.EVENT_JENIS_ESTOP_TEKAN
+    estop_lepas_jenis = settings.EVENT_JENIS_ESTOP_LEPAS
+
+    match_event: Dict[str, Any] = {
+        "mesin_id": clean_id,
+        "jenis": {"$in": [estop_tekan_jenis, estop_lepas_jenis]},
+    }
+    if sesi_id:
+        match_event["sesi_id"] = sesi_id.strip()
+    if pengguna:
+        match_event["pengguna"] = pengguna.strip().lower()
+
+    events = await db.event.find(match_event).sort([("sesi_id", 1), ("waktu", 1)]).to_list(None)
+    total_downtime, jumlah_kejadian, _, _ = _hitung_downtime_dan_kejadian(
+        events, dt_dari, dt_sampai, estop_tekan_jenis, estop_lepas_jenis
+    )
+
+    # 2. Hitung total operating time dari batch
+    match_batch: Dict[str, Any] = {"mesin_id": clean_id}
+    if sesi_id:
+        match_batch["sesi_id"] = sesi_id.strip()
+    if pengguna:
+        match_batch["pengguna"] = pengguna.strip().lower()
+    if dt_dari or dt_sampai:
+        tf: Dict[str, Any] = {}
+        if dt_dari:
+            tf["$gte"] = dt_dari
+        if dt_sampai:
+            tf["$lte"] = dt_sampai
+        match_batch["waktu_selesai"] = tf
+
+    res_batch = await db.batch.aggregate([
+        {"$match": match_batch},
+        {"$group": {"_id": None, "total_op_time": {"$sum": "$production_time"}}},
+    ]).to_list(1)
+
+    total_op_time = float(res_batch[0].get("total_op_time", 0.0)) if res_batch else 0.0
+
+    # Fallback jika belum ada batch: cari planned_production_time dari telemetri
+    if total_op_time <= 0:
+        match_tel: Dict[str, Any] = {"mesin_id": clean_id}
+        if sesi_id:
+            match_tel["sesi_id"] = sesi_id.strip()
+        tel_doc = await db.telemetri.find_one(match_tel, sort=[("waktu", -1)])
+        if tel_doc:
+            planned = float(tel_doc.get("planned_production_time") or 0.0)
+            total_op_time = max(0.0, planned - total_downtime)
+
+    mtbf = calculate_mtbf(total_op_time, jumlah_kejadian)
+    mttr = calculate_mttr(total_downtime, jumlah_kejadian)
+
+    return ReliabilityResponse(
+        mesin_id=clean_id,
+        mtbf_detik=mtbf,
+        mttr_detik=mttr,
+        jumlah_breakdown=jumlah_kejadian,
+        total_operating_time_detik=round(total_op_time, 3),
+        total_downtime_detik=round(total_downtime, 3),
+    )
+
+
+@router.get(
+    "/{id}/inventori",
+    response_model=InventoriResponse,
+    summary="Ambil status inventori bahan baku (stok rak atas dan restock)",
+    tags=["Analitik MES & Laporan"],
+)
+async def ambil_inventori_mesin(
+    id: str,
+    sesi_id: Optional[str] = Query(None, description="Filter berdasarkan ID sesi"),
+    _: Optional[str] = Depends(verify_read_access),
+):
+    """Membaca status sisa stok rak atas, kapasitas rak, jumlah restock, dan indikator butuh restock."""
+    db = get_db()
+    clean_id = id.strip()
+    query: Dict[str, Any] = {"mesin_id": clean_id}
+    if sesi_id:
+        query["sesi_id"] = sesi_id.strip()
+
+    doc = await db.telemetri.find_one(query, sort=[("waktu", -1)])
+    if not doc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Data telemetri inventori untuk mesin '{id}' belum tersedia",
+        )
+
+    sisa = int(doc.get("sisa_stok_rak_atas") or 0)
+    kapasitas = int(doc.get("kapasitas_stok_rak_atas") or 100)
+    jml_restock = int(doc.get("jumlah_restock") or 0)
+    jml_auto = int(doc.get("jumlah_auto_replenish_rak") or 0)
+
+    pct = round((sisa / kapasitas) * 100.0, 2) if kapasitas > 0 else 0.0
+    butuh = pct <= 20.0
+
+    return InventoriResponse(
+        mesin_id=clean_id,
+        sisa_stok_rak_atas=sisa,
+        kapasitas_stok_rak_atas=kapasitas,
+        jumlah_restock=jml_restock,
+        jumlah_auto_replenish_rak=jml_auto,
+        persentase_stok=pct,
+        butuh_restock=butuh,
+    )
+
+
+@router.get(
+    "/{id}/kapasitas",
+    response_model=KapasitasResponse,
+    summary="Ambil analisis kapasitas produksi teoritis vs efektif",
+    tags=["Analitik MES & Laporan"],
+)
+async def ambil_kapasitas_mesin(
+    id: str,
+    batch_ke: Optional[int] = Query(None, ge=1, description="Nomor batch tertentu"),
+    sesi_id: Optional[str] = Query(None, description="Filter berdasarkan ID sesi"),
+    _: Optional[str] = Depends(verify_read_access),
+    settings: Settings = Depends(get_settings),
+):
+    """Menghitung kapasitas teoritis per jam, kapasitas efektif aktual, dan utilisasi kapasitas."""
+    db = get_db()
+    clean_id = id.strip()
+
+    mesin_doc = await db.mesin.find_one({"_id": clean_id})
+    ideal_ct = (mesin_doc.get("ideal_cycle_time") if mesin_doc else None) or settings.IDEAL_CYCLE_TIME
+    kap_teoritis = calculate_theoretical_capacity(ideal_ct)
+
+    query_batch: Dict[str, Any] = {"mesin_id": clean_id}
+    if batch_ke is not None:
+        query_batch["batch_ke"] = batch_ke
+    if sesi_id:
+        query_batch["sesi_id"] = sesi_id.strip()
+
+    batch_doc = await db.batch.find_one(query_batch, sort=[("batch_ke", -1), ("waktu_selesai", -1)])
+
+    if batch_doc:
+        act_ct = float(batch_doc.get("actual_cycle_time_avg") or ideal_ct)
+        eff_cap = float(batch_doc.get("effective_capacity_per_hour") or 0.0)
+    else:
+        # Fallback telemetri
+        query_tel: Dict[str, Any] = {"mesin_id": clean_id}
+        if sesi_id:
+            query_tel["sesi_id"] = sesi_id.strip()
+        tel_doc = await db.telemetri.find_one(query_tel, sort=[("waktu", -1)])
+        if tel_doc:
+            act_ct = float(tel_doc.get("actual_cycle_time_avg") or ideal_ct)
+            eff_cap = float(tel_doc.get("production_capacity_per_hour") or calculate_effective_capacity_per_hour(int(tel_doc.get("botol_selesai") or 0), float(tel_doc.get("planned_production_time") or 3600)))
+        else:
+            act_ct = ideal_ct
+            eff_cap = 0.0
+
+    utilisasi = round((eff_cap / kap_teoritis) * 100.0, 2) if kap_teoritis > 0 else 0.0
+
+    return KapasitasResponse(
+        mesin_id=clean_id,
+        kapasitas_teoritis_per_jam=kap_teoritis,
+        kapasitas_efektif_per_jam=eff_cap,
+        utilisasi_kapasitas_pct=utilisasi,
+        actual_cycle_time_avg=act_ct,
+        ideal_cycle_time=ideal_ct,
+    )

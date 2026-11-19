@@ -69,7 +69,8 @@ Aplikasi membaca konfigurasi dari environment variables atau file `.env`:
 | :--- | :--- | :--- | :--- |
 | `POST` | `/api/telemetri` | Array `[TelemetriCreate]` (1–10 item) | Simpan data telemetri batch dengan dedup `id_kirim`. |
 | `POST` | `/api/event` | Object `EventCreate` | Simpan event mesin (*START, STOP, estop_tekan, estop_lepas*). |
-| `POST` | `/api/botol` | Object `BotolCreate` | Simpan data hasil inspeksi botol selesai. |
+| `POST` | `/api/botol` | Object `BotolCreate` | Simpan data hasil inspeksi botol selesai (auto-kalkulasi durasi isi & lead time). |
+| `POST` | `/api/batch` | Object `BatchCreate` | Simpan ringkasan batch selesai, verifikasi & arsipkan KPI (Availability, Performance, Quality, OEE). |
 
 ### 3. Live Monitoring & Konfigurasi Mesin
 | Method | Endpoint | Query Params | Deskripsi |
@@ -82,6 +83,15 @@ Aplikasi membaca konfigurasi dari environment variables atau file `.env`:
 ### 4. Analitik MES & Laporan
 | Method | Endpoint | Query Params | Deskripsi |
 | :--- | :--- | :--- | :--- |
+| `GET` | `/api/mesin/{id}/oee` | `batch_ke`, `sesi_id`, `pengguna`, `dari`, `sampai` | Analisis metrik OEE, Availability, Performance, Quality, Operating Time, dan Six Big Losses. |
+| `GET` | `/api/mesin/{id}/batch` | `sesi_id`, `pengguna`, `dari`, `sampai`, `page`, `skip`, `limit`, `wrap` | Daftar riwayat arsip batch produksi dengan pagination. |
+| `GET` | `/api/mesin/{id}/batch/{batch_ke}` | `sesi_id` | Detail ringkasan 1 batch produksi spesifik berdasarkan nomor urut batch. |
+| `GET` | `/api/mesin/{id}/wip` | `sesi_id` | Metrik Work-in-Process (peti, turret, kotak OK, kotak reject) dan peringatan kapasitas. |
+| `GET` | `/api/mesin/{id}/kualitas` | `sesi_id`, `pengguna`, `dari`, `sampai`, `batch_ke` | First Pass Yield, diagram Pareto cacat produk, dan batas kontrol SPC (Mean, UCL, LCL). |
+| `GET` | `/api/mesin/{id}/lead-time` | `sesi_id`, `pengguna`, `dari`, `sampai` | Rata-rata Manufacturing Lead Time (MLT) botol dan batch, serta durasi pengisian cairan. |
+| `GET` | `/api/mesin/{id}/reliability` | `sesi_id`, `pengguna`, `dari`, `sampai` | Metrik reliabilitas mesin: MTBF, MTTR, operating time, dan frekuensi breakdown. |
+| `GET` | `/api/mesin/{id}/inventori` | `sesi_id` | Status stok bahan baku rak atas, jumlah restock, dan indikator butuh restock. |
+| `GET` | `/api/mesin/{id}/kapasitas` | `batch_ke`, `sesi_id` | Perbandingan kapasitas produksi teoritis (878.05 bph) vs kapasitas efektif aktual dan utilisasi. |
 | `GET` | `/api/mesin/{id}/ringkasan` | `dari`, `sampai`, `sesi_id`, `pengguna` | Ringkasan metrik produksi, botol OK/gagal, rata-rata siklus, kategori defect, downtime, dan rincian per pengguna. |
 | `GET` | `/api/mesin/{id}/botol` | `nomor`, `status`, `slot`, `sesi_id`, `pengguna`, `dari`, `sampai`, `page`, `skip`, `limit`, `wrap` | Riwayat botol untuk analisis Kualitas dan Traceability dengan filter & pagination. |
 | `GET` | `/api/mesin/{id}/botol/{nomor}` | `sesi_id` | Detail traceability botol individual berdasarkan nomor urut (termasuk `durasi_siklus_detik`). |

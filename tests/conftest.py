@@ -8,7 +8,7 @@ from mongomock_motor import AsyncMongoMockClient
 from app.config import Settings, get_settings
 from app.db import db_instance, get_db
 from app.main import app
-from setup_mongodb import BOTOL, EVENT, MESIN, MESIN_01
+from setup_mongodb import BATCH, BOTOL, EVENT, MESIN, MESIN_01
 
 TEST_API_KEY = "test-secret-key-12345"
 
@@ -85,6 +85,27 @@ async def test_db():
             [("mesin_id", 1), ("sesi_id", 1)], name="mesin_sesi"
         )
         await db.botol.create_index(
+            [("id_kirim", 1)],
+            name="id_kirim_unik",
+            unique=True,
+            partialFilterExpression={"id_kirim": {"$type": "string"}},
+        )
+    except Exception:
+        pass
+
+    # 5. batch
+    await _safe_create_collection(db, "batch", validator=BATCH)
+    try:
+        await db.batch.create_index(
+            [("mesin_id", 1), ("batch_ke", -1)], name="mesin_batch_ke"
+        )
+        await db.batch.create_index(
+            [("mesin_id", 1), ("waktu_selesai", -1)], name="mesin_waktu_selesai"
+        )
+        await db.batch.create_index(
+            [("sesi_id", 1), ("batch_ke", 1)], name="sesi_batch_unik", unique=True
+        )
+        await db.batch.create_index(
             [("id_kirim", 1)],
             name="id_kirim_unik",
             unique=True,

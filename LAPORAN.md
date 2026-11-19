@@ -346,3 +346,26 @@ Laporan ini secara jujur mencatat batasan pengujian yang belum dieksekusi:
    ```bash
    curl -X GET "https://api.fillingmachine.domainkamu.com/api/health"
    ```
+
+---
+
+## 8. Upgrade Spesifikasi Monitoring Web MES (Simulasi Unity Smart Filling Water)
+
+### Ringkasan Peningkatan:
+1. **Modul Murni KPI (`app/kpi.py`)**:
+   - Implementasi perhitungan OEE (Availability, Performance, Quality), Six Big Losses (Breakdown, Setup, Starvation/Packaging, Speed Loss, Quality Loss), MTBF, MTTR, kapasitas efektif dan teoritis, serta statistik SPC deskriptif level isi cairan (Mean, Std, Min, Max, UCL, LCL).
+   - Seluruh fungsi murni (*pure functions*), aman dari *ZeroDivisionError*, dan lolos verifikasi angka *golden test*.
+2. **Endpoint Tulis Baru & Peningkatan**:
+   - `POST /api/batch`: Arsip ringkasan produksi per batch, perhitungan ulang metrik KPI di server, pencatatan flag `kpi_mismatch: true` jika deviasi nilai Unity > 0.5% point tanpa menolak data, serta penjaminan idempotensi melalui unique index `id_kirim` dan compound index `(sesi_id, batch_ke)`.
+   - `POST /api/botol`: Auto-kalkulasi durasi pengisian cairan (`durasi_isi_detik`) dan lead time unit (`unit_mlt_detik`) jika tidak dikirim, serta validasi urutan waktu menaik.
+   - `POST /api/telemetri`: Dukungan atribut produksi, inventori, WIP, kumulatif downtime, dan cycle time terkini, dengan toleransi tipe `tahap` (string/int).
+3. **Endpoint Analisis & Monitoring MES Baru**:
+   - `GET /api/mesin/{id}/oee`: Analisis OEE, Availability, Performance, Quality, Operating Time, dan Six Big Losses.
+   - `GET /api/mesin/{id}/batch` & `GET /api/mesin/{id}/batch/{batch_ke}`: Riwayat arsip dan detail batch produksi.
+   - `GET /api/mesin/{id}/wip`: Pemantauan stok WIP di peti, turret, dan kotak penampung dengan indikator ambang batas peringatan kapasitas (80%).
+   - `GET /api/mesin/{id}/kualitas`: First Pass Yield, diagram Pareto cacat produk (tidak penuh / tanpa tutup), dan batas kontrol statistik SPC.
+   - `GET /api/mesin/{id}/lead-time`: Rata-rata Manufacturing Lead Time (MLT) per botol dan per batch.
+   - `GET /api/mesin/{id}/reliability`: Metrik reliabilitas MTBF, MTTR, total operating time, dan frekuensi insiden darurat.
+   - `GET /api/mesin/{id}/inventori`: Status stok bahan baku rak atas, jumlah restock, dan indikator butuh restock.
+   - `GET /api/mesin/{id}/kapasitas`: Evaluasi perbandingan kapasitas teoritis (878.05 bph) terhadap kapasitas efektif aktual dan utilisasi mesin.
+

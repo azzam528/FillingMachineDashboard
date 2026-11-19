@@ -85,6 +85,24 @@ class Settings(BaseSettings):
         description="URL frontend MES spesifik opsional untuk ditambahkan ke whitelist CORS",
     )
 
+    # Ambang batas & parameter MES baru
+    KPI_MISMATCH_TOLERANCE: float = Field(
+        default=0.5,
+        description="Ambang batas toleransi selisih KPI Unity vs Server dalam poin persen",
+    )
+    WIP_WARNING_RATIO: float = Field(
+        default=0.8,
+        description="Rasio peringatan WIP terhadap kapasitas maksimal (default 0.8)",
+    )
+    IDEAL_CYCLE_TIME: float = Field(
+        default=4.1,
+        description="Cycle time ideal mesin dalam detik",
+    )
+    BATAS_LULUS_QC: float = Field(
+        default=0.85,
+        description="Level isi minimum kelulusan QC botol",
+    )
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

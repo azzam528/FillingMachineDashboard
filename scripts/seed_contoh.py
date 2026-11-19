@@ -190,13 +190,43 @@ def main():
             r_b = client.post(f"{api_prefix}/botol", headers=headers, json=b)
             print(f"  POST /botol (No.{b['nomor']}, Status:{b['status']}): {r_b.status_code} - {r_b.json().get('pesan')}")
 
-        # 5. Cek Status Telemetri Terakhir via GET
-        print(f"\n[5/6] Membaca telemetri terakhir (GET {api_prefix}/mesin/mesin-01/status) ...")
+        # 5. Kirim Batch Selesai (Golden Test Dataset)
+        print("\n[5/7] Mengirim ringkasan 1 batch produksi selesai ...")
+        batch_sample = {
+            "mesin_id": "mesin-01",
+            "sesi_id": "gibral-20261029-1000",
+            "pengguna": "gibral",
+            "id_kirim": "seed-batch-01",
+            "batch_ke": 1,
+            "waktu_mulai": (now - timedelta(seconds=240)).isoformat(),
+            "waktu_selesai": now.isoformat(),
+            "target_qty": 30,
+            "botol_selesai": 30,
+            "botol_ok": 27,
+            "botol_reject": 3,
+            "reject_isi_kurang": 2,
+            "reject_tanpa_tutup": 1,
+            "total_dikemas": 27,
+            "planned_production_time": 240.0,
+            "downtime_unplanned": 20.0,
+            "setup_time": 15.0,
+            "starvation_downtime": 5.0,
+            "packaging_time": 50.0,
+            "availability_pct": 62.50,
+            "performance_pct": 82.00,
+            "quality_pct": 90.00,
+            "oee_pct": 46.13,
+        }
+        r_batch = client.post(f"{api_prefix}/batch", headers=headers, json=batch_sample)
+        print(f"  POST /batch (Batch-1): {r_batch.status_code} - {r_batch.json().get('pesan')}")
+
+        # 6. Cek Status Telemetri Terakhir via GET
+        print(f"\n[6/7] Membaca telemetri terakhir (GET {api_prefix}/mesin/mesin-01/status) ...")
         r_status = client.get(f"{api_prefix}/mesin/mesin-01/status")
         print(f"  Status: {r_status.status_code} - Pengguna: {r_status.json().get('pengguna')}, Waktu: {r_status.json().get('waktu')}")
 
-        # 6. Cek Ringkasan Produksi via GET
-        print(f"\n[6/6] Membaca ringkasan produksi (GET {api_prefix}/mesin/mesin-01/ringkasan) ...")
+        # 7. Cek Ringkasan Produksi via GET
+        print(f"\n[7/7] Membaca ringkasan produksi (GET {api_prefix}/mesin/mesin-01/ringkasan) ...")
         r_ringkasan = client.get(f"{api_prefix}/mesin/mesin-01/ringkasan")
         print(f"  Status: {r_ringkasan.status_code}")
         print(f"  Hasil Ringkasan: {r_ringkasan.json()}")
